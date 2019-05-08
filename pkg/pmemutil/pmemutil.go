@@ -51,33 +51,25 @@ import (
 
 type Pmemlogpool *C.PMEMlogpool
 
-type Pmem struct {
-	Plp Pmemlogpool
-	Size int
-}
-
 // Pmemwriter structure just stores the buffer that would be written to pmem
 type Pmemwriter struct {
-	pmem Pmem
+	plp Pmemlogpool
 }
 
 // Newpmemwriter returns a new pmem writer
 func Newpmemwriter() *Pmemwriter {
 	return &Pmemwriter{
-		pmem: Pmem{
-			Plp: nil,
-			Size: 0,
-		},
+		plp: nil,
 	}
 }
 
 // Print prints the log
-func Print(pmem *Pmem) (b []byte) {
-	len := C.int(pmem.Size)
+func Print(plp Pmemlogpool) (b []byte) {
+	len := C.pmemlog_tell(plp)
 	ptr := C.malloc(C.size_t(len))
         defer C.free(unsafe.Pointer(ptr))
-	C.logprint(pmem.Plp, (*C.uchar)(ptr))
-	return C.GoBytes(ptr, len)
+	C.logprint(plp, (*C.uchar)(ptr))
+	return C.GoBytes(ptr, C.int(len))
 }
 
 // Close closes the logpool
@@ -94,13 +86,11 @@ func (p *Pmemwriter) Write(b []byte) (n int, err error) {
 	cdata := C.CBytes(b)
 	defer C.free(unsafe.Pointer(cdata))
 
-	if p.pmem.Plp != nil {
-		if int(C.byteToString(p.pmem.Plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
+	if p.plp != nil {
+		if int(C.byteToString(p.plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
 			err = errors.New("Log could not be appended in pmem")
 		}
 	}
-	// Update total size of log
-	p.pmem.Size = p.pmem.Size + len(b)
 	return len(b), err
 }
 
@@ -116,12 +106,12 @@ func (p *Pmemwriter) InitiatePmemLogPool(path string) (err error) {
 	if plp == nil {
 		err = errors.New("Failed to open pmem file")
 	}
-	p.pmem.Plp = plp
+	p.plp = plp
 	return err
 }
 
 // GetLogPool fetches the the log pool
-func (p *Pmemwriter) GetLogPool() (pmem *Pmem) {
-	pmem = &p.pmem
-	return pmem
+func (p *Pmemwriter) GetLogPool() (plp Pmemlogpool) {
+	plp = p.plp
+	return plp
 }

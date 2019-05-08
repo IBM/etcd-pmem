@@ -85,7 +85,7 @@ func TestNew(t *testing.T) {
 		t.Fatalf("err = %v, want nil", err)
 	}
 	e.flush()
-	tf := pmemutil.Print(w.pmem)
+	tf := pmemutil.Print(w.plp)
 	if !bytes.Equal(tf, wb.Bytes()) {
 		t.Errorf("data = %v, want %v", tf, wb.Bytes())
 	}
