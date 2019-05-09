@@ -58,6 +58,14 @@ func TestNew(t *testing.T) {
 		t.Fatal(err)
 	}
 	gd := make([]byte, off)
+	pmemaware, err := pmemutil.IsPmemTrue(p)
+	if err != nil {
+                t.Fatal(err)
+        }
+	// pmemaware = true
+	if pmemaware {
+		gd = pmemutil.Print(w.plp)
+	} else {
 	f, err := os.Open(filepath.Join(p, filepath.Base(w.tail().Name())))
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +74,7 @@ func TestNew(t *testing.T) {
 	if _, err = io.ReadFull(f, gd); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
+}
 
 	var wb bytes.Buffer
 	e := newEncoder(&wb, 0, 0)
@@ -85,9 +94,8 @@ func TestNew(t *testing.T) {
 		t.Fatalf("err = %v, want nil", err)
 	}
 	e.flush()
-	tf := pmemutil.Print(w.plp)
-	if !bytes.Equal(tf, wb.Bytes()) {
-		t.Errorf("data = %v, want %v", tf, wb.Bytes())
+	if !bytes.Equal(gd, wb.Bytes()) {
+		t.Errorf("data = %v, want %v", gd, wb.Bytes())
 	}
 }
 

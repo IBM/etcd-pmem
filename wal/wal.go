@@ -103,7 +103,11 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
-	pmemaware := false
+	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
+	if err != nil {
+		return nil, errors.New("Temporary file in pmem could not be removed")
+	}
+	// pmemaware = true
 	if pmemaware {
 		w := &WAL{
 			lg:        lg,
@@ -113,7 +117,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 		p := filepath.Join(dirpath, walName(0, 0))
 		pw := pmemutil.Newpmemwriter()
-		err := pw.InitiatePmemLogPool(p)
+		err = pw.InitiatePmemLogPool(p)
 		if err != nil {
 			if lg != nil {
 				lg.Warn(

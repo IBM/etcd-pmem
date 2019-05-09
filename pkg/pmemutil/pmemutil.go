@@ -16,14 +16,18 @@ package pmemutil
 /*
 #cgo CFLAGS: -g -Wall
 #cgo LDFLAGS: -lpmemlog -lpmem
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include "libpmem.h"
 #include <libpmemlog.h>
 
 // size of the pmemlog pool -- 1 GB
 #define POOL_SIZE ((size_t)(1 << 30))
+#define	PMEM_LEN 4096
 
 int byteToString(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
 	return pmemlog_append(plp, buf, len);
@@ -39,17 +43,47 @@ printit(const void *buf, size_t len, void *arg)
 void logprint(PMEMlogpool *plp, unsigned char *out) {
 	pmemlog_walk(plp, 0, printit, out);
 }
+
+int IsPmemTrue(char *path) {
+	char *pmemaddr;
+	size_t mapped_len;
+	int is_pmem;
+
+	if ((pmemaddr = pmem_map_file(path, PMEM_LEN,
+				PMEM_FILE_CREATE|PMEM_FILE_EXCL,
+				0666, &mapped_len, &is_pmem)) == NULL) {
+		perror("Error - pmem_map_file");
+		exit(1);
+	}
+
+	pmem_unmap(pmemaddr, mapped_len);
+	return is_pmem;
+}
 */
 import "C"
 
 import (
 	"errors"
+	"fmt"
+	"math/rand"
+	"os"
+	"path/filepath"
 	"unsafe"
 
 	"go.etcd.io/etcd/pkg/fileutil"
 )
 
 type Pmemlogpool *C.PMEMlogpool
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyz"
+// RandStringBytesRmndr generates random string that is required for random filename
+func RandStringBytesRmndr(n int) string {
+    b := make([]byte, n)
+    for i := range b {
+        b[i] = letterBytes[rand.Int63() % int64(len(letterBytes))]
+    }
+    return string(b)
+}
 
 // Pmemwriter structure just stores the buffer that would be written to pmem
 type Pmemwriter struct {
@@ -75,6 +109,19 @@ func Print(plp Pmemlogpool) (b []byte) {
 // Close closes the logpool
 func Close(plp Pmemlogpool) {
 	C.pmemlog_close(plp)
+}
+
+// IsPmemTrue checks if a particular directory path is in pmem or not
+func IsPmemTrue(dirpath string) (bool, error) {
+	path := filepath.Join(filepath.Clean(dirpath), RandStringBytesRmndr(5))
+
+	fmt.Println("The file is:", path)
+	is_pmem := int(C.IsPmemTrue(C.CString(path)))
+	err := os.Remove(path)
+	if is_pmem == 0 {
+		return false, err
+	} 
+	return true, err
 }
 
 // Write writes len(b) bytes to the pmem buffer
