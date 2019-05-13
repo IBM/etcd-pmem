@@ -54,7 +54,7 @@ var (
 	// The actual size might be larger than this. In general, the default
 	// value should be used, but this is defined as an exported variable
 	// so that tests can set a different segment size.
-	SegmentSizeBytes int64 = 64 * 1000 * 1000 // 64MB
+	SegmentSizeBytes int64 = 64 * 1024 * 1024 // 64MB
 
 	plog = capnslog.NewPackageLogger("go.etcd.io/etcd", "wal")
 
@@ -107,7 +107,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}
-	// pmemaware = true
+	pmemaware = true
 	if pmemaware {
 		w := &WAL{
 			lg:        lg,
@@ -117,7 +117,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 		p := filepath.Join(dirpath, walName(0, 0))
 		pw := pmemutil.Newpmemwriter()
-		err = pw.InitiatePmemLogPool(p)
+		err = pw.InitiatePmemLogPool(p, SegmentSizeBytes)
 		if err != nil {
 			if lg != nil {
 				lg.Warn(
@@ -132,13 +132,35 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		w.encoder = newPmemEncoder(pw, 0)
 
 		// TODO Very hacky way - the file is not locked but we are using it as locked file, must be fixed
-		f, err := os.Open(p) // For read access.
+		f, err := os.OpenFile(p, os.O_RDWR, fileutil.PrivateFileMode) // For read access.
 		if err != nil {
 			return nil, err
 		}
 		l := &fileutil.LockedFile{f}
 
 		w.locks = append(w.locks, l)
+		if _, err = l.Seek(0, io.SeekEnd); err != nil {
+			if lg != nil {
+				lg.Warn(
+					"failed to seek an initial WAL file",
+					zap.String("path", p),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
+		if err = fileutil.Preallocate(l.File, SegmentSizeBytes, true); err != nil {
+			if lg != nil {
+				lg.Warn(
+					"failed to preallocate an initial WAL file",
+					zap.String("path", p),
+					zap.Int64("segment-bytes", SegmentSizeBytes),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
+
 		if err = w.saveCrc(0); err != nil {
 			return nil, err
 		}

@@ -25,8 +25,7 @@ package pmemutil
 #include "libpmem.h"
 #include <libpmemlog.h>
 
-// size of the pmemlog pool -- 1 GB
-#define POOL_SIZE ((size_t)(1 << 30))
+// size of the pmemlog pool -- 64MB
 #define	PMEM_LEN 4096
 
 int byteToString(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
@@ -64,7 +63,6 @@ import "C"
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -115,7 +113,6 @@ func Close(plp Pmemlogpool) {
 func IsPmemTrue(dirpath string) (bool, error) {
 	path := filepath.Join(filepath.Clean(dirpath), RandStringBytesRmndr(5))
 
-	fmt.Println("The file is:", path)
 	is_pmem := int(C.IsPmemTrue(C.CString(path)))
 	err := os.Remove(path)
 	if is_pmem == 0 {
@@ -142,11 +139,11 @@ func (p *Pmemwriter) Write(b []byte) (n int, err error) {
 }
 
 // InitiatePmemLogPool initiates a log pool
-func (p *Pmemwriter) InitiatePmemLogPool(path string) (err error) {
+func (p *Pmemwriter) InitiatePmemLogPool(path string, poolSize int64) (err error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
-	plp := C.pmemlog_create(cpath, C.POOL_SIZE, C.uint(fileutil.PrivateFileMode))
+	plp := C.pmemlog_create(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
 	if plp == nil {
 		plp = C.pmemlog_open(cpath)
 	}
