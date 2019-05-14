@@ -62,7 +62,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
                 t.Fatal(err)
         }
-	pmemaware = true
+	// pmemaware = true
 	if pmemaware {
 		gd = pmemutil.Print(w.plp)
 	} else {

@@ -103,25 +103,28 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
+	var p, tmpdirpath string
+	var f *fileutil.LockedFile
+	w := &WAL{
+		lg:       lg,
+		dir:      dirpath,
+		metadata: metadata,
+	}
 	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
 	if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}
-	pmemaware = true
+	// pmemaware = true
 	if pmemaware {
-		w := &WAL{
-			lg:        lg,
-			dir:       dirpath,
-			metadata:  metadata,
-			pmemaware: pmemaware,
-		}
-		p := filepath.Join(dirpath, walName(0, 0))
+		w.pmemaware = pmemaware
+
+		p = filepath.Join(dirpath, walName(0, 0))
 		pw := pmemutil.Newpmemwriter()
 		err = pw.InitiatePmemLogPool(p, SegmentSizeBytes)
 		if err != nil {
 			if lg != nil {
 				lg.Warn(
-					"failed to create an initial WAL file",
+					"failed to create an initial WAL file in pmem",
 					zap.String("path", p),
 					zap.Error(err),
 				)
@@ -131,25 +134,51 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		w.plp = pw.GetLogPool()
 		w.encoder = newPmemEncoder(pw, 0)
 
-		// TODO Very hacky way - the file is not locked but we are using it as locked file, must be fixed
-		f, err := os.OpenFile(p, os.O_RDWR, fileutil.PrivateFileMode) // For read access.
+		// TODO Very hacky way - the file is probably locked twice, must be fixed
+		f, err = fileutil.LockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
 		if err != nil {
-			return nil, err
-		}
-		l := &fileutil.LockedFile{f}
-
-		w.locks = append(w.locks, l)
-		if _, err = l.Seek(0, io.SeekEnd); err != nil {
 			if lg != nil {
 				lg.Warn(
-					"failed to seek an initial WAL file",
+					"failed to flock an initial WAL file",
 					zap.String("path", p),
 					zap.Error(err),
 				)
 			}
 			return nil, err
 		}
-		if err = fileutil.Preallocate(l.File, SegmentSizeBytes, true); err != nil {
+	} else {
+		// keep temporary wal directory so WAL initialization appears atomic
+		tmpdirpath = filepath.Clean(dirpath) + ".tmp"
+		if fileutil.Exist(tmpdirpath) {
+			if err := os.RemoveAll(tmpdirpath); err != nil {
+				return nil, err
+			}
+		}
+		if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
+			if lg != nil {
+				lg.Warn(
+					"failed to create a temporary WAL directory",
+					zap.String("tmp-dir-path", tmpdirpath),
+					zap.String("dir-path", dirpath),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
+
+		p = filepath.Join(tmpdirpath, walName(0, 0))
+		f, err = fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
+		if err != nil {
+			if lg != nil {
+				lg.Warn(
+					"failed to flock an initial WAL file",
+					zap.String("path", p),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
+		if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
 			if lg != nil {
 				lg.Warn(
 					"failed to preallocate an initial WAL file",
@@ -161,79 +190,12 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 			return nil, err
 		}
 
-		if err = w.saveCrc(0); err != nil {
+		w.encoder, err = newFileEncoder(f.File, 0)
+		if err != nil {
 			return nil, err
 		}
-		if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: metadata}); err != nil {
-			return nil, err
-		}
-		if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
-			return nil, err
-		}
-		return w, nil
-	}
-	// keep temporary wal directory so WAL initialization appears atomic
-	tmpdirpath := filepath.Clean(dirpath) + ".tmp"
-	if fileutil.Exist(tmpdirpath) {
-		if err := os.RemoveAll(tmpdirpath); err != nil {
-			return nil, err
-		}
-	}
-	if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to create a temporary WAL directory",
-				zap.String("tmp-dir-path", tmpdirpath),
-				zap.String("dir-path", dirpath),
-				zap.Error(err),
-			)
-		}
-		return nil, err
 	}
 
-	p := filepath.Join(tmpdirpath, walName(0, 0))
-	f, err := fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
-	if err != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to flock an initial WAL file",
-				zap.String("path", p),
-				zap.Error(err),
-			)
-		}
-		return nil, err
-	}
-	if _, err = f.Seek(0, io.SeekEnd); err != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to seek an initial WAL file",
-				zap.String("path", p),
-				zap.Error(err),
-			)
-		}
-		return nil, err
-	}
-	if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to preallocate an initial WAL file",
-				zap.String("path", p),
-				zap.Int64("segment-bytes", SegmentSizeBytes),
-				zap.Error(err),
-			)
-		}
-		return nil, err
-	}
-
-	w := &WAL{
-		lg:       lg,
-		dir:      dirpath,
-		metadata: metadata,
-	}
-	w.encoder, err = newFileEncoder(f.File, 0)
-	if err != nil {
-		return nil, err
-	}
 	w.locks = append(w.locks, f)
 	if err = w.saveCrc(0); err != nil {
 		return nil, err
@@ -243,6 +205,10 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	}
 	if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
 		return nil, err
+	}
+
+	if w.pmemaware {
+		return w, nil
 	}
 
 	if w, err = w.renameWAL(tmpdirpath); err != nil {
