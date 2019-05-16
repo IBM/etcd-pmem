@@ -103,13 +103,37 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
-	var p, tmpdirpath string
 	var f *fileutil.LockedFile
+
+	// keep temporary wal directory so WAL initialization appears atomic
+	tmpdirpath := filepath.Clean(dirpath) + ".tmp"
+	if fileutil.Exist(tmpdirpath) {
+		if err := os.RemoveAll(tmpdirpath); err != nil {
+			return nil, err
+		}
+	}
+	if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
+		if lg != nil {
+			lg.Warn(
+				"failed to create a temporary WAL directory",
+				zap.String("tmp-dir-path", tmpdirpath),
+				zap.String("dir-path", dirpath),
+				zap.Error(err),
+			)
+		}
+		return nil, err
+	}
+
 	w := &WAL{
 		lg:       lg,
 		dir:      dirpath,
 		metadata: metadata,
 	}
+
+	// Form the path for temporary wal file
+	p := filepath.Join(tmpdirpath, walName(0, 0))
+
+	// Check if the current location is in pmem
 	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
 	if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
@@ -118,7 +142,6 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if pmemaware {
 		w.pmemaware = pmemaware
 
-		p = filepath.Join(dirpath, walName(0, 0))
 		pw := pmemutil.Newpmemwriter()
 		err = pw.InitiatePmemLogPool(p, SegmentSizeBytes)
 		if err != nil {
@@ -147,26 +170,6 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 			return nil, err
 		}
 	} else {
-		// keep temporary wal directory so WAL initialization appears atomic
-		tmpdirpath = filepath.Clean(dirpath) + ".tmp"
-		if fileutil.Exist(tmpdirpath) {
-			if err := os.RemoveAll(tmpdirpath); err != nil {
-				return nil, err
-			}
-		}
-		if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
-			if lg != nil {
-				lg.Warn(
-					"failed to create a temporary WAL directory",
-					zap.String("tmp-dir-path", tmpdirpath),
-					zap.String("dir-path", dirpath),
-					zap.Error(err),
-				)
-			}
-			return nil, err
-		}
-
-		p = filepath.Join(tmpdirpath, walName(0, 0))
 		f, err = fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
 		if err != nil {
 			if lg != nil {
@@ -205,10 +208,6 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	}
 	if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
 		return nil, err
-	}
-
-	if w.pmemaware {
-		return w, nil
 	}
 
 	if w, err = w.renameWAL(tmpdirpath); err != nil {
@@ -890,11 +889,16 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	if err := w.saveState(&st); err != nil {
 		return err
 	}
-
-	curOff, err := w.tail().Seek(0, io.SeekCurrent)
+	var curOff int64
+	var err    error
+	if w.pmemaware {
+		curOff = pmemutil.Seek(w.plp)
+	} else {
+		curOff, err = w.tail().Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
+}
 	if curOff < SegmentSizeBytes {
 		if mustSync {
 			return w.sync()
@@ -957,3 +961,4 @@ func closeAll(rcs ...io.ReadCloser) error {
 	}
 	return nil
 }
+

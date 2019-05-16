@@ -121,6 +121,11 @@ func IsPmemTrue(dirpath string) (bool, error) {
 	return true, err
 }
 
+// Seek gives the total bytes written in a particular file
+func Seek(plp Pmemlogpool) int64 {
+	return int64(C.pmemlog_tell(plp))
+}
+
 // Write writes len(b) bytes to the pmem buffer
 func (p *Pmemwriter) Write(b []byte) (n int, err error) {
 	ptr := C.malloc(C.size_t(len(b)))
