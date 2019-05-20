@@ -61,7 +61,7 @@ func TestFilePipelineFailLockFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.RemoveAll(tdir)
+	defer os.RemoveAll(tdir)
 
 	fp := newFilePipeline(zap.NewExample(), tdir, math.MaxInt64)
 	defer fp.Close()
