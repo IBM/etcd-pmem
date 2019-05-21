@@ -48,6 +48,7 @@ func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
 	// Check if the current location is in pmem
 	is_pmem := false
 	is_pmem, _ = pmemutil.IsPmemTrue(dir)
+	is_pmem = true
 	/*if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}*/

@@ -58,11 +58,22 @@ int IsPmemTrue(char *path) {
 	pmem_unmap(pmemaddr, mapped_len);
 	return is_pmem;
 }
+
+PMEMlogpool *pmemlogOpen(char *path) {
+	PMEMlogpool *plp;
+	plp = pmemlog_open(path);
+	if (plp == NULL) {
+	perror(path);
+	exit(1);
+}
+return plp;
+}
 */
 import "C"
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -86,6 +97,11 @@ func RandStringBytesRmndr(n int) string {
 // Pmemwriter structure just stores the buffer that would be written to pmem
 type Pmemwriter struct {
 	plp Pmemlogpool
+}
+
+// Pmemreader implements buffering for io.Reader object
+type Pmemreader struct {
+        plp Pmemlogpool
 }
 
 // Newpmemwriter returns a new pmem writer
@@ -163,4 +179,54 @@ func (p *Pmemwriter) InitiatePmemLogPool(path string, poolSize int64) (err error
 func (p *Pmemwriter) GetLogPool() (plp Pmemlogpool) {
 	plp = p.plp
 	return plp
+}
+
+// OpenRead opens a pmemlog from a path and returns the Pmem reader
+func OpenRead(path string) (pr *Pmemreader, err error) {
+        fmt.Println("The path is:", path)
+        cpath := C.CString(path)
+        defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogOpen(cpath)
+        if plp == nil {
+                err = errors.New("Failed to open pmem file for Reader")
+        }
+
+        pr = &Pmemreader{
+                plp: plp,
+        }
+        return pr, err
+}
+
+// Reader reads data into b
+func (pr *Pmemreader) Read(b []byte) (n int, err error) {
+       length := C.pmemlog_tell(pr.plp)
+
+       ptr := C.malloc(C.size_t(length))
+       defer C.free(unsafe.Pointer(ptr))
+
+       C.logprint(pr.plp, (*C.uchar)(ptr))
+       fmt.Println("The length in pmemutil read is:", length)
+       return copy(b, C.GoBytes(ptr, C.int(length))), nil
+}
+
+// Close close the log pool
+func (pr *Pmemreader) Close() (err error){
+	C.pmemlog_close(pr.plp)
+	return nil
+}
+
+// OpenWrite opens a pmemlog from a path and returns the Pmem writer
+func OpenWrite(path string) (pw *Pmemwriter, err error) {
+        cpath := C.CString(path)
+        defer C.free(unsafe.Pointer(cpath))
+
+        plp := C.pmemlogOpen(cpath)
+        if plp == nil {
+                err = errors.New("Failed to open pmem file for Writer")
+        }
+        pw = &Pmemwriter{
+                plp: plp,
+        }
+        return pw, err
 }
