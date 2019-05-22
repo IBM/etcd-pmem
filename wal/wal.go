@@ -138,7 +138,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}
-	// pmemaware = true
+	pmemaware = true
 	if pmemaware {
 		w.pmemaware = pmemaware
 
@@ -263,6 +263,9 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 			)
 		}
 		return nil, perr
+	}
+	if w.pmemaware {
+		pmemutil.Close(w.plp)
 	}
 
 	return w, nil
@@ -418,56 +421,56 @@ func selectWALFiles(lg *zap.Logger, dirpath string, snap walpb.Snapshot) ([]stri
 }
 
 func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int, write bool) ([]io.Reader, []*fileutil.LockedFile, func() error, error) {
-pmemaware, err := pmemutil.IsPmemTrue(dirpath)
-        if err != nil {
-                return nil, nil, nil, errors.New("Temporary file in pmem could not be removed during openWALFiles")
-        }
+	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
+	if err != nil {
+		return nil, nil, nil, errors.New("Temporary file in pmem could not be removed during openWALFiles")
+	}
 
-        //pmemaware = true
-        rcs := make([]io.ReadCloser, 0)
-        rs := make([]io.Reader, 0)
-        ls := make([]*fileutil.LockedFile, 0)
-        for _, name := range names[nameIndex:] {
-                p := filepath.Join(dirpath, name)
-                if write {
-                        l, err := fileutil.TryLockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
-                        if err != nil {
-                                closeAll(rcs...)
-                                return nil, nil, nil, err
-                        }
-                        ls = append(ls, l)
-                        if pmemaware {
-                                pr, err := pmemutil.OpenRead(p)
-                                if err != nil {
-                                        return nil, nil, nil, err
-                                }
-                                rcs = append(rcs, pr)
-                        } else {
-                                rcs = append(rcs, l)
-                        }
-                } else {
-                        if pmemaware {
-                                rf, err := pmemutil.OpenRead(p)
-                                if err != nil {
-                                        return nil, nil, nil, err
-                                }
-                                rcs = append(rcs, rf)
-                        } else {
-                                rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
-                                if err != nil {
-                                        closeAll(rcs...)
-                                        return nil, nil, nil, err
-                                }
-                                rcs = append(rcs, rf)
-                        }
-                        ls = append(ls, nil)
-                }
-                rs = append(rs, rcs[len(rcs)-1])
-        }
+	pmemaware = true
+	rcs := make([]io.ReadCloser, 0)
+	rs := make([]io.Reader, 0)
+	ls := make([]*fileutil.LockedFile, 0)
+	for _, name := range names[nameIndex:] {
+		p := filepath.Join(dirpath, name)
+		if write {
+			l, err := fileutil.TryLockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
+			if err != nil {
+				closeAll(rcs...)
+				return nil, nil, nil, err
+			}
+			ls = append(ls, l)
+			if pmemaware {
+				pr, err := pmemutil.OpenRead(p)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				rcs = append(rcs, pr)
+			} else {
+				rcs = append(rcs, l)
+			}
+		} else {
+			if pmemaware {
+				rf, err := pmemutil.OpenRead(p)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				rcs = append(rcs, rf)
+			} else {
+				rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
+				if err != nil {
+					closeAll(rcs...)
+					return nil, nil, nil, err
+				}
+				rcs = append(rcs, rf)
+			}
+			ls = append(ls, nil)
+		}
+		rs = append(rs, rcs[len(rcs)-1])
+	}
 
-        closer := func() error { return closeAll(rcs...) }
+	closer := func() error { return closeAll(rcs...) }
 
-        return rs, ls, closer, nil
+	return rs, ls, closer, nil
 }
 
 // ReadAll reads out records of the current WAL.
@@ -481,121 +484,121 @@ pmemaware, err := pmemutil.IsPmemTrue(dirpath)
 // TODO: maybe loose the checking of match.
 // After ReadAll, the WAL will be ready for appending new records.
 func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
-        w.mu.Lock()
-        defer w.mu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-        rec := &walpb.Record{}
-        decoder := w.decoder
+	rec := &walpb.Record{}
+	decoder := w.decoder
 
-        var match bool
-        for err = decoder.decode(rec); err == nil; err = decoder.decode(rec) {
-                switch rec.Type {
-                case entryType:
-                        e := mustUnmarshalEntry(rec.Data)
-                        if e.Index > w.start.Index {
-                                ents = append(ents[:e.Index-w.start.Index-1], e)
-                        }
-                        w.enti = e.Index
+	var match bool
+	for err = decoder.decode(rec); err == nil; err = decoder.decode(rec) {
+		switch rec.Type {
+		case entryType:
+			e := mustUnmarshalEntry(rec.Data)
+			if e.Index > w.start.Index {
+				ents = append(ents[:e.Index-w.start.Index-1], e)
+			}
+			w.enti = e.Index
 
-                case stateType:
-                        state = mustUnmarshalState(rec.Data)
+		case stateType:
+			state = mustUnmarshalState(rec.Data)
 
-                case metadataType:
-                        if metadata != nil && !bytes.Equal(metadata, rec.Data) {
-                                state.Reset()
-                                return nil, state, nil, ErrMetadataConflict
-                        }
-                        metadata = rec.Data
+		case metadataType:
+			if metadata != nil && !bytes.Equal(metadata, rec.Data) {
+				state.Reset()
+				return nil, state, nil, ErrMetadataConflict
+			}
+			metadata = rec.Data
 
-                case crcType:
-                        crc := decoder.crc.Sum32()
-                        // current crc of decoder must match the crc of the record.
-                        // do no need to match 0 crc, since the decoder is a new one at this case.
-                        if crc != 0 && rec.Validate(crc) != nil {
-                                state.Reset()
-                                return nil, state, nil, ErrCRCMismatch
-                        }
-                        decoder.updateCRC(rec.Crc)
+		case crcType:
+			crc := decoder.crc.Sum32()
+			// current crc of decoder must match the crc of the record.
+			// do no need to match 0 crc, since the decoder is a new one at this case.
+			if crc != 0 && rec.Validate(crc) != nil {
+				state.Reset()
+				return nil, state, nil, ErrCRCMismatch
+			}
+			decoder.updateCRC(rec.Crc)
 
-                case snapshotType:
-                        var snap walpb.Snapshot
-                        pbutil.MustUnmarshal(&snap, rec.Data)
-                        if snap.Index == w.start.Index {
-                                if snap.Term != w.start.Term {
-                                        state.Reset()
-                                        return nil, state, nil, ErrSnapshotMismatch
-                                }
-                                match = true
-                        }
+		case snapshotType:
+			var snap walpb.Snapshot
+			pbutil.MustUnmarshal(&snap, rec.Data)
+			if snap.Index == w.start.Index {
+				if snap.Term != w.start.Term {
+					state.Reset()
+					return nil, state, nil, ErrSnapshotMismatch
+				}
+				match = true
+			}
 
-                default:
-                        state.Reset()
-                        return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
-                }
-        }
+		default:
+			state.Reset()
+			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
+		}
+	}
 
-        switch w.tail() {
-        case nil:
-                // We do not have to read out all entries in read mode.
-                // The last record maybe a partial written one, so
-                // ErrunexpectedEOF might be returned.
-                if err != io.EOF && err != io.ErrUnexpectedEOF {
-                        state.Reset()
-                        return nil, state, nil, err
-                }
-        default:
-                     // We must read all of the entries if WAL is opened in write mode.
-                if err != io.EOF {
-                        state.Reset()
-                        return nil, state, nil, err
-                }
-                // decodeRecord() will return io.EOF if it detects a zero record,
-                // but this zero record may be followed by non-zero records from
-                // a torn write. Overwriting some of these non-zero records, but
-                // not all, will cause CRC errors on WAL open. Since the records
-                // were never fully synced to disk in the first place, it's safe
-                // to zero them out to avoid any CRC errors from new writes.
-                if _, err = w.tail().Seek(w.decoder.lastOffset(), io.SeekStart); err != nil {
-                        return nil, state, nil, err
-                }
-                if err = fileutil.ZeroToEnd(w.tail().File); err != nil {
-                        return nil, state, nil, err
-                }
-        }
+	switch w.tail() {
+	case nil:
+		// We do not have to read out all entries in read mode.
+		// The last record maybe a partial written one, so
+		// ErrunexpectedEOF might be returned.
+		if err != io.EOF && err != io.ErrUnexpectedEOF {
+			state.Reset()
+			return nil, state, nil, err
+		}
+	default:
+		// We must read all of the entries if WAL is opened in write mode.
+		if err != io.EOF {
+			state.Reset()
+			return nil, state, nil, err
+		}
+		// decodeRecord() will return io.EOF if it detects a zero record,
+		// but this zero record may be followed by non-zero records from
+		// a torn write. Overwriting some of these non-zero records, but
+		// not all, will cause CRC errors on WAL open. Since the records
+		// were never fully synced to disk in the first place, it's safe
+		// to zero them out to avoid any CRC errors from new writes.
+		if _, err = w.tail().Seek(w.decoder.lastOffset(), io.SeekStart); err != nil {
+			return nil, state, nil, err
+		}
+		if err = fileutil.ZeroToEnd(w.tail().File); err != nil {
+			return nil, state, nil, err
+		}
+	}
 
-        err = nil
-        if !match {
-                err = ErrSnapshotNotFound
-        }
+	err = nil
+	if !match {
+		err = ErrSnapshotNotFound
+	}
 
-        // close decoder, disable reading
-        if w.readClose != nil {
-                w.readClose()
-                w.readClose = nil
-        }
-        w.start = walpb.Snapshot{}
+	// close decoder, disable reading
+	if w.readClose != nil {
+		w.readClose()
+		w.readClose = nil
+	}
+	w.start = walpb.Snapshot{}
 
-        w.metadata = metadata
+	w.metadata = metadata
 
-        if w.tail() != nil {
-                // create encoder (chain crc with the decoder), enable appending
-                if w.pmemaware {
-                        var pw *pmemutil.Pmemwriter
-                        pw, err = pmemutil.OpenWrite(w.tail().Name())
-                        if err != nil {
-                                return 
-                        }
-                        w.encoder = newPmemEncoder(pw, w.decoder.lastCRC())
-                } else {
-                        w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
-                        if err != nil {
-                                return
-                        }
-                }
-        }
-        w.decoder = nil
+	if w.tail() != nil {
+		// create encoder (chain crc with the decoder), enable appending
+		if w.pmemaware {
+			var pw *pmemutil.Pmemwriter
+			pw, err = pmemutil.OpenWrite(w.tail().Name())
+			if err != nil {
+				return
+			}
+			w.encoder = newPmemEncoder(pw, w.decoder.lastCRC())
+		} else {
+			w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
+			if err != nil {
+				return
+			}
+		}
+	}
+	w.decoder = nil
 
-        return metadata, state, ents, err
+	return metadata, state, ents, err
 }
 
 // Verify reads through the given WAL and verifies that it is not corrupted.
@@ -871,10 +874,10 @@ func (w *WAL) Close() error {
 		}
 	}
 
-	if w.pmemaware {
+	/*if w.pmemaware {
 		pmemutil.Close(w.plp)
 		return nil
-	}
+	}*/
 
 	return w.dirFile.Close()
 }
@@ -901,45 +904,49 @@ func (w *WAL) saveState(s *raftpb.HardState) error {
 }
 
 func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
-        w.mu.Lock()
-        defer w.mu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-        // short cut, do not call sync
-        if raft.IsEmptyHardState(st) && len(ents) == 0 {
-                return nil
-        }
+	// short cut, do not call sync
+	if raft.IsEmptyHardState(st) && len(ents) == 0 {
+		return nil
+	}
 
-        mustSync := raft.MustSync(st, w.state, len(ents))
+	mustSync := raft.MustSync(st, w.state, len(ents))
 
-        // TODO(xiangli): no more reference operator
-        for i := range ents {
-                if err := w.saveEntry(&ents[i]); err != nil {
-                        return err
-                }
-        }
-        if err := w.saveState(&st); err != nil {
-                return err
-        }
+	// TODO(xiangli): no more reference operator
+	for i := range ents {
+		if err := w.saveEntry(&ents[i]); err != nil {
+			return err
+		}
+	}
+	if err := w.saveState(&st); err != nil {
+		return err
+	}
 
-        var curOff int64
-        var err    error 
-        if w.pmemaware { 
-                curOff = pmemutil.Seek(w.plp)
-		fmt.Println("Douchebag")
-        } else {
-                curOff, err = w.tail().Seek(0, io.SeekCurrent)
-                if err != nil {
-                        return err
-                }
-        }
-        if curOff < SegmentSizeBytes {
-                if mustSync {
-                        return w.sync()
-                }
-                return nil
-        }
+	var curOff int64
+	var err error
+	if w.pmemaware {
+		pr, err := pmemutil.OpenRead(filepath.Join(w.dir, w.tail().Name()))
+		if err != nil {
+			return err
+		}
+		plp := pr.GetLogPool()
+		curOff = pmemutil.Seek(plp)
+	} else {
+		curOff, err = w.tail().Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+	}
+	if curOff < SegmentSizeBytes {
+		if mustSync {
+			return w.sync()
+		}
+		return nil
+	}
 
-        return w.cut()
+	return w.cut()
 }
 
 func (w *WAL) SaveSnapshot(e walpb.Snapshot) error {
@@ -994,4 +1001,3 @@ func closeAll(rcs ...io.ReadCloser) error {
 	}
 	return nil
 }
-
