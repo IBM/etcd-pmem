@@ -61,12 +61,12 @@ func TestNew(t *testing.T) {
 
 	var f io.ReadCloser
 	if pmemaware {
-		pr, err := pmemutil.OpenRead(filepath.Join(p, filepath.Base(w.tail().Name())))
+		pr := pmemutil.OpenForRead(filepath.Join(p, filepath.Base(w.tail().Name())))
+		plp, err := pr.GetLogPool()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		plp := pr.GetLogPool()
 		// file is preallocated to segment size; only read data written by wal
 		off := pmemutil.Seek(plp)
 		gd = make([]byte, off)

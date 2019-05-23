@@ -36,8 +36,6 @@ type filePipeline struct {
 	// count number of files generated
 	count      int
 	is_pmem    bool
-	plp        pmemutil.Pmemlogpool
-	pmemwriter *pmemutil.Pmemwriter
 
 	filec chan *fileutil.LockedFile
 	errc  chan error
@@ -100,8 +98,8 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			return nil, err
 		}
 	} else {
-		fp.pmemwriter = pmemutil.Newpmemwriter()
-		err = fp.pmemwriter.InitiatePmemLogPool(fpath, fp.size)
+		fmt.Println("File size: ", fp.size)
+		err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
 		if err != nil {
 			if fp.lg != nil {
 				fp.lg.Warn(
@@ -112,8 +110,7 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			}
 			return nil, err
 		}
-		fp.plp = fp.pmemwriter.GetLogPool()
-		//fp.pmemwriter = pw
+
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
 		f, err = fileutil.LockFile(fpath, os.O_RDWR, fileutil.PrivateFileMode)
 		if err != nil {

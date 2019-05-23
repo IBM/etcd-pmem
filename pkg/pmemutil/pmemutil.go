@@ -63,10 +63,23 @@ PMEMlogpool *pmemlogOpen(char *path) {
 	PMEMlogpool *plp;
 	plp = pmemlog_open(path);
 	if (plp == NULL) {
-	perror(path);
-	exit(1);
+		perror(path);
+		exit(1);
+	}
+	return plp;
 }
-return plp;
+
+PMEMlogpool *pmemlogCreateOrOpen(char *path, size_t poolSize, unsigned int mode) {
+	PMEMlogpool *plp;
+	plp= pmemlog_create(path, poolSize, mode);
+	if (plp == NULL) {
+		perror(path);
+		plp = pmemlog_open(path);
+	}
+	if (plp == NULL) {
+		perror(path);
+	}
+	return plp;
 }
 */
 import "C"
@@ -95,30 +108,43 @@ func RandStringBytesRmndr(n int) string {
 	return string(b)
 }
 
-// Pmemwriter structure just stores the buffer that would be written to pmem
-type Pmemwriter struct {
-	plp Pmemlogpool
-}
+// IsPmemTrue checks if a particular directory path is in pmem or not
+func IsPmemTrue(dirpath string) (bool, error) {
+	path := filepath.Join(filepath.Clean(dirpath), RandStringBytesRmndr(5))
 
-// Pmemreader implements buffering for io.Reader object
-type Pmemreader struct {
-	plp Pmemlogpool
-}
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
 
-// Newpmemwriter returns a new pmem writer
-func Newpmemwriter() *Pmemwriter {
-	return &Pmemwriter{
-		plp: nil,
+	isPmem := int(C.IsPmemTrue(cpath))
+	err := os.Remove(path)
+	if isPmem == 0 {
+		return false, err
 	}
+	return true, err
 }
 
-// Print prints the log
-func Print(plp Pmemlogpool) (b []byte) {
-	len := C.pmemlog_tell(plp)
-	ptr := C.malloc(C.size_t(len))
-	defer C.free(unsafe.Pointer(ptr))
-	C.logprint(plp, (*C.uchar)(ptr))
-	return C.GoBytes(ptr, C.int(len))
+// InitiatePmemLogPool initiates a log pool
+func InitiatePmemLogPool(path string, poolSize int64) (err error) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogCreateOrOpen(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
+	if plp == nil {
+		err = errors.New("Failed to open pmem file")
+	}
+	defer func() {
+		if plp != nil {
+			Close(plp)
+		}
+	}()
+
+	return err
+}
+
+// Seek gives the total bytes written in a particular file
+func Seek(plp Pmemlogpool) int64 {
+	defer Close(plp)
+	return int64(C.pmemlog_tell(plp))
 }
 
 // Close closes the logpool
@@ -126,25 +152,42 @@ func Close(plp Pmemlogpool) {
 	C.pmemlog_close(plp)
 }
 
-// IsPmemTrue checks if a particular directory path is in pmem or not
-func IsPmemTrue(dirpath string) (bool, error) {
-	path := filepath.Join(filepath.Clean(dirpath), RandStringBytesRmndr(5))
-
-	is_pmem := int(C.IsPmemTrue(C.CString(path)))
-	err := os.Remove(path)
-	if is_pmem == 0 {
-		return false, err
-	}
-	return true, err
+// Pmemwriter structure just stores the buffer that would be written to pmem
+type Pmemwriter struct {
+	path string
 }
 
-// Seek gives the total bytes written in a particular file
-func Seek(plp Pmemlogpool) int64 {
-	return int64(C.pmemlog_tell(plp))
+// OpenForWrite returns the Pmem writer
+func OpenForWrite(path string) (pw *Pmemwriter) {
+	pw = &Pmemwriter{
+		path: path,
+	}
+	return pw
+}
+
+// GetLogPool fetches the the log pool. Make sure you close this just after using the log pool.
+func (pw *Pmemwriter) GetLogPool() (plp Pmemlogpool, err error) {
+	cpath := C.CString(pw.path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	plp = C.pmemlogOpen(cpath)
+	if plp == nil {
+		err = errors.New("Failed to open pmem file")
+	}
+	return plp, err
 }
 
 // Write writes len(b) bytes to the pmem buffer
-func (p *Pmemwriter) Write(b []byte) (n int, err error) {
+func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
+	cpath := C.CString(pw.path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogOpen(cpath)
+	if plp == nil {
+		err = errors.New("Failed to open pmem file for write")
+	}
+	defer Close(plp)
+
 	ptr := C.malloc(C.size_t(len(b)))
 	defer C.free(unsafe.Pointer(ptr))
 
@@ -152,88 +195,70 @@ func (p *Pmemwriter) Write(b []byte) (n int, err error) {
 	cdata := C.CBytes(b)
 	defer C.free(unsafe.Pointer(cdata))
 
-	if p.plp != nil {
-		if int(C.byteToString(p.plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
+	if plp != nil {
+		if int(C.byteToString(plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
 			err = errors.New("Log could not be appended in pmem")
 		}
 	}
 	return len(b), err
 }
 
-// InitiatePmemLogPool initiates a log pool
-func (p *Pmemwriter) InitiatePmemLogPool(path string, poolSize int64) (err error) {
-	cpath := C.CString(path)
+// Pmemreader implements buffering for io.Reader object
+type Pmemreader struct {
+	path string
+}
+
+// OpenForRead opens a pmemlog from a path and returns the Pmem reader
+func OpenForRead(path string) (pr *Pmemreader) {
+	pr = &Pmemreader{
+		path: path,
+	}
+	return pr
+}
+
+// Print prints the log
+/* func Print(plp Pmemlogpool) (b []byte) {
+	len := C.pmemlog_tell(plp)
+	ptr := C.malloc(C.size_t(len))
+	defer C.free(unsafe.Pointer(ptr))
+	C.logprint(plp, (*C.uchar)(ptr))
+	return C.GoBytes(ptr, C.int(len))
+} */
+
+// GetLogPool fetches the the log pool. Make sure you close this just after using the log pool.
+func (pr *Pmemreader) GetLogPool() (plp Pmemlogpool, err error) {
+	cpath := C.CString(pr.path)
 	defer C.free(unsafe.Pointer(cpath))
 
-	plp := C.pmemlog_create(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
-	if plp == nil {
-		plp = C.pmemlog_open(cpath)
-	}
+	plp = C.pmemlogOpen(cpath)
 	if plp == nil {
 		err = errors.New("Failed to open pmem file")
 	}
-	p.plp = plp
-	return err
-}
-
-// GetLogPool fetches the the log pool
-func (p *Pmemwriter) GetLogPool() (plp Pmemlogpool) {
-	plp = p.plp
-	return plp
-}
-
-// GetLogPool fetches the the log pool
-func (p *Pmemreader) GetLogPool() (plp Pmemlogpool) {
-	plp = p.plp
-	return plp
-}
-
-// OpenRead opens a pmemlog from a path and returns the Pmem reader
-func OpenRead(path string) (pr *Pmemreader, err error) {
-	fmt.Println("The path is:", path)
-	cpath := C.CString(path)
-	defer C.free(unsafe.Pointer(cpath))
-
-	plp := C.pmemlogOpen(cpath)
-	if plp == nil {
-		err = errors.New("Failed to open pmem file for Reader")
-	}
-
-	pr = &Pmemreader{
-		plp: plp,
-	}
-	return pr, err
+	return plp, err
 }
 
 // Reader reads data into b
 func (pr *Pmemreader) Read(b []byte) (n int, err error) {
-	length := C.pmemlog_tell(pr.plp)
-
-	ptr := C.malloc(C.size_t(length))
-	defer C.free(unsafe.Pointer(ptr))
-
-	C.logprint(pr.plp, (*C.uchar)(ptr))
-	fmt.Println("The length in pmemutil read is:", length)
-	return copy(b, C.GoBytes(ptr, C.int(length))), nil
-}
-
-// Close close the log pool
-func (pr *Pmemreader) Close() (err error) {
-	C.pmemlog_close(pr.plp)
-	return nil
-}
-
-// OpenWrite opens a pmemlog from a path and returns the Pmem writer
-func OpenWrite(path string) (pw *Pmemwriter, err error) {
-	cpath := C.CString(path)
+	cpath := C.CString(pr.path)
 	defer C.free(unsafe.Pointer(cpath))
 
 	plp := C.pmemlogOpen(cpath)
 	if plp == nil {
-		err = errors.New("Failed to open pmem file for Writer")
+		err = errors.New("Failed to open pmem file for read")
 	}
-	pw = &Pmemwriter{
-		plp: plp,
-	}
-	return pw, err
+	defer Close(plp)
+
+	length := C.pmemlog_tell(plp)
+
+	ptr := C.malloc(C.size_t(length))
+	defer C.free(unsafe.Pointer(ptr))
+
+	C.logprint(plp, (*C.uchar)(ptr))
+	fmt.Println("The length in pmemutil read is:", length)
+	return copy(b, C.GoBytes(ptr, C.int(length))), nil
+}
+
+// Close is a placeholder
+func (pr *Pmemreader) Close() (err error) {
+	return nil
 }
