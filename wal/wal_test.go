@@ -340,11 +340,17 @@ func TestCut(t *testing.T) {
 	// check the state in the last WAL
 	// We do check before closing the WAL to ensure that Cut syncs the data
 	// into the disk.
-	f, err := os.Open(filepath.Join(p, wname))
+	var f io.ReadCloser
+	pmemaware := true
+	if pmemaware {
+		f = pmemutil.OpenForRead(filepath.Join(p, wname))
+	} else {
+	f, err = os.Open(filepath.Join(p, wname))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
+}
 	nw := &WAL{
 		decoder: newDecoder(f),
 		start:   snap,

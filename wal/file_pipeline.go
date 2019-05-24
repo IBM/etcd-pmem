@@ -110,6 +110,7 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			}
 			return nil, err
 		}
+		fmt.Println("fpath-",fpath)
 
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
 		f, err = fileutil.LockFile(fpath, os.O_RDWR, fileutil.PrivateFileMode)
@@ -131,6 +132,7 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 func (fp *filePipeline) run() {
 	defer close(fp.errc)
 	for {
+		fmt.Println("I am here inside run")
 		f, err := fp.alloc()
 		if err != nil {
 			fp.errc <- err
@@ -140,7 +142,9 @@ func (fp *filePipeline) run() {
 		case fp.filec <- f:
 		case <-fp.donec:
 			os.Remove(f.Name())
-			f.Close()
+			if !fp.is_pmem {
+				f.Close()
+			}
 			return
 		}
 	}
