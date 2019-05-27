@@ -65,8 +65,8 @@ func newPmemEncoder(path string, prevCrc uint32) (*encoder, error) {
 	pw := pmemutil.OpenForWrite(path)
 	plp, err := pw.GetLogPool()
 	if err != nil {
-                return nil, err
-        }
+		return nil, err
+	}
 
 	offset := pmemutil.Seek(plp)
 	return newEncoder(pw, prevCrc, int(offset)), nil

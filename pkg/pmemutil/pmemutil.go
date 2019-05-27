@@ -87,6 +87,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -206,12 +207,14 @@ func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
 // Pmemreader implements buffering for io.Reader object
 type Pmemreader struct {
 	path string
+	i    int64 // current reading index
 }
 
 // OpenForRead opens a pmemlog from a path and returns the Pmem reader
 func OpenForRead(path string) (pr *Pmemreader) {
 	pr = &Pmemreader{
 		path: path,
+		i:    0,
 	}
 	return pr
 }
@@ -255,7 +258,13 @@ func (pr *Pmemreader) Read(b []byte) (n int, err error) {
 
 	C.logprint(plp, (*C.uchar)(ptr))
 	fmt.Println("The length in pmemutil read is:", length)
-	return copy(b, C.GoBytes(ptr, C.int(length))), nil
+	s := C.GoBytes(ptr, C.int(length))
+	if pr.i >= int64(len(s)) {
+		return 0, io.EOF
+	}
+	n = copy(b, s[pr.i:])
+	pr.i += int64(n)
+	return
 }
 
 // Close is a placeholder

@@ -341,16 +341,20 @@ func TestCut(t *testing.T) {
 	// We do check before closing the WAL to ensure that Cut syncs the data
 	// into the disk.
 	var f io.ReadCloser
-	pmemaware := true
-	if pmemaware {
-		f = pmemutil.OpenForRead(filepath.Join(p, wname))
-	} else {
-	f, err = os.Open(filepath.Join(p, wname))
+	pmemaware, err := pmemutil.IsPmemTrue(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-}
+	pmemaware = true
+	if pmemaware {
+		f = pmemutil.OpenForRead(filepath.Join(p, wname))
+	} else {
+		f, err = os.Open(filepath.Join(p, wname))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+	}
 	nw := &WAL{
 		decoder: newDecoder(f),
 		start:   snap,

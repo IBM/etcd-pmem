@@ -24,7 +24,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-	"strings"
 
 	"go.etcd.io/etcd/pkg/pmemutil"
 
@@ -155,15 +154,15 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 		w.encoder, err = newPmemEncoder(p, 0)
 		if err != nil {
-                        if lg != nil {
-                                lg.Warn(
-                                        "failed to create an initial pmem encoder",
-                                        zap.String("path", p),
-                                        zap.Error(err),
-                                )
-                        }
-                        return nil, err
-                }
+			if lg != nil {
+				lg.Warn(
+					"failed to create an initial pmem encoder",
+					zap.String("path", p),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
 
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
 		f, err = fileutil.LockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
@@ -320,7 +319,6 @@ func (w *WAL) renameWAL(tmpdirpath string) (*WAL, error) {
 	df, err := fileutil.OpenDir(w.dir)
 	w.dirFile = df
 	if w.pmemaware {
-		fmt.Println("The elusive path is:", filepath.Join(w.dir, filepath.Base(w.tail().Name())))
 		updateEncoderForPmem(filepath.Join(w.dir, filepath.Base(w.tail().Name())), w.encoder)
 	}
 	return w, err
@@ -517,7 +515,6 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 			crc := decoder.crc.Sum32()
 			// current crc of decoder must match the crc of the record.
 			// do no need to match 0 crc, since the decoder is a new one at this case.
-			fmt.Println("The CRC is", crc)
 			if crc != 0 && rec.Validate(crc) != nil {
 				state.Reset()
 				return nil, state, nil, ErrCRCMismatch
@@ -589,8 +586,8 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 		if w.pmemaware {
 			w.encoder, err = newPmemEncoder(filepath.Join(w.dir, w.tail().Name()), w.decoder.lastCRC())
 			if err != nil {
-                                return
-                        }
+				return
+			}
 		} else {
 			w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
 			if err != nil {
@@ -687,37 +684,33 @@ func Verify(lg *zap.Logger, walDir string, snap walpb.Snapshot) error {
 // cut first creates a temp wal file and writes necessary headers into it.
 // Then cut atomically rename temp wal file to a wal file.
 func (w *WAL) cut() error {
-        // close old wal file; truncate to avoid wasting space if an early cut
-        var (
-                off  int64
-                err error
-                newTail *fileutil.LockedFile
-                pr *pmemutil.Pmemreader
-                plp pmemutil.Pmemlogpool
-        )
-	fmt.Println("I am here in cut")
-        if !w.pmemaware {
-                off, err = w.tail().Seek(0, io.SeekCurrent)
-                if err != nil {
-                        return err
-                }
-        } else {
-		fmt.Println("Name1-",w.tail().Name())
-                pr = pmemutil.OpenForRead(filepath.Join(w.dir, filepath.Base(w.tail().Name())))
-                plp, err = pr.GetLogPool()
-                if err != nil {
-                        return err
-                }
-                off = pmemutil.Seek(plp)
-        }
+	// close old wal file; truncate to avoid wasting space if an early cut
+	var (
+		off     int64
+		err     error
+		newTail *fileutil.LockedFile
+	)
+	if w.pmemaware {
+		pr := pmemutil.OpenForRead(filepath.Join(w.dir, filepath.Base(w.tail().Name())))
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			return err
+		}
+		off = pmemutil.Seek(plp)
+	} else {
+		off, err = w.tail().Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+	}
 
-        if err = w.tail().Truncate(off); err != nil {
-                return err
-        }
+	if err := w.tail().Truncate(off); err != nil {
+		return err
+	}
 
-        if err = w.sync(); err != nil {
-                return err
-        }
+	if err = w.sync(); err != nil {
+		return err
+	}
 
 	fpath := filepath.Join(w.dir, walName(w.seq()+1, w.enti+1))
 
@@ -729,20 +722,18 @@ func (w *WAL) cut() error {
 
 	// update writer and save the previous crc
 	w.locks = append(w.locks, newTail)
-	fmt.Println("file name", w.tail().Name())
-        prevCrc := w.encoder.crc.Sum32()
-        if w.pmemaware {
-		fmt.Println("I am here")
-                w.encoder, err = newPmemEncoder(w.tail().Name(), prevCrc)
+	prevCrc := w.encoder.crc.Sum32()
+	if w.pmemaware {
+		w.encoder, err = newPmemEncoder(w.tail().Name(), prevCrc)
 		if err != nil {
-                                return err
-                        }
-        } else {
-                w.encoder, err = newFileEncoder(w.tail().File, prevCrc)
-                if err != nil {
-                        return err
-                }
-        }
+			return err
+		}
+	} else {
+		w.encoder, err = newFileEncoder(w.tail().File, prevCrc)
+		if err != nil {
+			return err
+		}
+	}
 
 	if err = w.saveCrc(prevCrc); err != nil {
 		return err
@@ -762,8 +753,8 @@ func (w *WAL) cut() error {
 	}
 
 	if w.pmemaware {
-		pr = pmemutil.OpenForRead(w.tail().Name())
-		plp, err = pr.GetLogPool()
+		pr := pmemutil.OpenForRead(w.tail().Name())
+		plp, err := pr.GetLogPool()
 		if err != nil {
 			return err
 		}
@@ -788,8 +779,10 @@ func (w *WAL) cut() error {
 	if newTail, err = fileutil.LockFile(fpath, os.O_WRONLY, fileutil.PrivateFileMode); err != nil {
 		return err
 	}
-	if _, err = newTail.Seek(off, io.SeekStart); err != nil {
-		return err
+	if !w.pmemaware {
+		if _, err = newTail.Seek(off, io.SeekStart); err != nil {
+			return err
+		}
 	}
 
 	w.locks[len(w.locks)-1] = newTail
@@ -798,14 +791,14 @@ func (w *WAL) cut() error {
 	if w.pmemaware {
 		w.encoder, err = newPmemEncoder(w.tail().Name(), prevCrc)
 		if err != nil {
-                return err
-        }
-} else {
-	w.encoder, err = newFileEncoder(w.tail().File, prevCrc)
-	if err != nil {
-		return err
+			return err
+		}
+	} else {
+		w.encoder, err = newFileEncoder(w.tail().File, prevCrc)
+		if err != nil {
+			return err
+		}
 	}
-}
 
 	if w.lg != nil {
 		w.lg.Info("created a new WAL segment", zap.String("path", fpath))
@@ -816,7 +809,6 @@ func (w *WAL) cut() error {
 }
 
 func (w *WAL) sync() error {
-	fmt.Println("Inside sync")
 	if w.encoder != nil {
 		if err := w.encoder.flush(); err != nil {
 			return err
@@ -967,8 +959,7 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	var curOff int64
 	var err error
 	if w.pmemaware {
-		name := strings.Split(w.tail().Name(),"/")
-		pr := pmemutil.OpenForRead(filepath.Join(w.dir, name[len(name)-1]))
+		pr := pmemutil.OpenForRead(filepath.Join(w.dir, filepath.Base(w.tail().Name())))
 		plp, err := pr.GetLogPool()
 		if err != nil {
 			return err
@@ -977,15 +968,12 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 		curOff = pmemutil.Seek(plp)
 	} else {
 		curOff, err = w.tail().Seek(0, io.SeekCurrent)
-		fmt.Println("curOff-",curOff)
 		if err != nil {
 			return err
 		}
 	}
-	fmt.Println("The curOff is:", curOff)
 	if curOff < SegmentSizeBytes {
 		if mustSync {
-	fmt.Println("The strangest path is:", w.tail().Name())
 			return w.sync()
 		}
 		return nil
