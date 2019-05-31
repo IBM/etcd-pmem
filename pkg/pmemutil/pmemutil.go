@@ -59,16 +59,6 @@ int IsPmemTrue(char *path) {
 	return is_pmem;
 }
 
-PMEMlogpool *pmemlogOpen(char *path) {
-	PMEMlogpool *plp;
-	plp = pmemlog_open(path);
-	if (plp == NULL) {
-		perror(path);
-		exit(1);
-	}
-	return plp;
-}
-
 PMEMlogpool *pmemlogCreateOrOpen(char *path, size_t poolSize, unsigned int mode) {
 	PMEMlogpool *plp;
 	plp= pmemlog_create(path, poolSize, mode);
@@ -81,12 +71,21 @@ PMEMlogpool *pmemlogCreateOrOpen(char *path, size_t poolSize, unsigned int mode)
 	}
 	return plp;
 }
+
+PMEMlogpool *pmemlogOpen(const char *path) {
+	PMEMlogpool *plp;
+	plp = pmemlog_open(path);
+	if (plp == NULL) {
+		perror(path);
+		exit(1);
+	}
+	return plp;
+}
 */
 import "C"
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"math/rand"
 	"os"
@@ -146,6 +145,57 @@ func InitiatePmemLogPool(path string, poolSize int64) (err error) {
 func Seek(plp Pmemlogpool) int64 {
 	defer Close(plp)
 	return int64(C.pmemlog_tell(plp))
+}
+
+// ZeroToEndForPmem zeros a pmem file starting from SEEK_CUR to its SEEK_END. May temporarily
+// shorten the length of the file.
+func ZeroToEndForPmem(path string, f *os.File) error {
+	off, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	Resize(path, off)
+
+	_, err = f.Seek(off, io.SeekStart)
+	return err
+}
+
+// Resize resizes the pmem file. There was no better way found to resize.
+func Resize(filePath string, off int64) (err error) {
+	pr := OpenForRead(filePath)
+	data := make([]byte, off)
+	r, err := pr.Read(data)
+	if err != nil {
+		err = errors.New("Could not read data during resizing pmem file")
+		return err
+	}
+
+	err = os.Remove(filePath)
+	if err != nil {
+		err = errors.New("Could not delete the file with bigger size while resizing pmem file")
+		return err
+	}
+
+	if off < 2097152 {
+		off = 2097152
+	}
+	err = InitiatePmemLogPool(filePath, off)
+	if err != nil {
+		return err
+	}
+	pw := OpenForWrite(filePath)
+	w, err := pw.Write(data)
+	if err != nil {
+		err = errors.New("Could not write data during resizing pmem file")
+		return err
+	}
+
+	if r != w {
+		err = errors.New("Could not write same bytes what were read.")
+		return err
+	}
+
+	return nil
 }
 
 // Close closes the logpool
@@ -219,15 +269,6 @@ func OpenForRead(path string) (pr *Pmemreader) {
 	return pr
 }
 
-// Print prints the log
-/* func Print(plp Pmemlogpool) (b []byte) {
-	len := C.pmemlog_tell(plp)
-	ptr := C.malloc(C.size_t(len))
-	defer C.free(unsafe.Pointer(ptr))
-	C.logprint(plp, (*C.uchar)(ptr))
-	return C.GoBytes(ptr, C.int(len))
-} */
-
 // GetLogPool fetches the the log pool. Make sure you close this just after using the log pool.
 func (pr *Pmemreader) GetLogPool() (plp Pmemlogpool, err error) {
 	cpath := C.CString(pr.path)
@@ -257,7 +298,6 @@ func (pr *Pmemreader) Read(b []byte) (n int, err error) {
 	defer C.free(unsafe.Pointer(ptr))
 
 	C.logprint(plp, (*C.uchar)(ptr))
-	fmt.Println("The length in pmemutil read is:", length)
 	s := C.GoBytes(ptr, C.int(length))
 	if pr.i >= int64(len(s)) {
 		return 0, io.EOF

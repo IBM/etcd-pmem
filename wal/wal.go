@@ -368,6 +368,15 @@ func Open(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, error) {
 	if w.dirFile, err = fileutil.OpenDir(w.dir); err != nil {
 		return nil, err
 	}
+
+	// Check if the current location is in pmem
+	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
+	if err != nil {
+		return nil, errors.New("Temporary file in pmem could not be removed")
+	}
+	pmemaware = true
+	w.pmemaware = pmemaware
+
 	return w, nil
 }
 
@@ -553,6 +562,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 			state.Reset()
 			return nil, state, nil, err
 		}
+
 		// decodeRecord() will return io.EOF if it detects a zero record,
 		// but this zero record may be followed by non-zero records from
 		// a torn write. Overwriting some of these non-zero records, but
@@ -562,8 +572,15 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 		if _, err = w.tail().Seek(w.decoder.lastOffset(), io.SeekStart); err != nil {
 			return nil, state, nil, err
 		}
-		if err = fileutil.ZeroToEnd(w.tail().File); err != nil {
-			return nil, state, nil, err
+
+		if w.pmemaware {
+			if err = pmemutil.ZeroToEndForPmem(filepath.Join(w.dir, filepath.Base(w.tail().Name())), w.tail().File); err != nil {
+				return nil, state, nil, err
+			}
+		} else {
+			if err = fileutil.ZeroToEnd(w.tail().File); err != nil {
+				return nil, state, nil, err
+			}
 		}
 	}
 
@@ -584,7 +601,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 	if w.tail() != nil {
 		// create encoder (chain crc with the decoder), enable appending
 		if w.pmemaware {
-			w.encoder, err = newPmemEncoder(filepath.Join(w.dir, w.tail().Name()), w.decoder.lastCRC())
+			w.encoder, err = newPmemEncoder(filepath.Join(w.dir, filepath.Base(w.tail().Name())), w.decoder.lastCRC())
 			if err != nil {
 				return
 			}
@@ -691,21 +708,25 @@ func (w *WAL) cut() error {
 		newTail *fileutil.LockedFile
 	)
 	if w.pmemaware {
-		pr := pmemutil.OpenForRead(filepath.Join(w.dir, filepath.Base(w.tail().Name())))
+		p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+		pr := pmemutil.OpenForRead(p)
 		plp, err := pr.GetLogPool()
 		if err != nil {
 			return err
 		}
 		off = pmemutil.Seek(plp)
+		if err := pmemutil.Resize(p, off); err != nil {
+			return err
+		}
 	} else {
 		off, err = w.tail().Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
 		}
-	}
 
-	if err := w.tail().Truncate(off); err != nil {
-		return err
+		if err := w.tail().Truncate(off); err != nil {
+			return err
+		}
 	}
 
 	if err = w.sync(); err != nil {
@@ -911,6 +932,7 @@ func (w *WAL) Close() error {
 			}
 		}
 	}
+
 	return w.dirFile.Close()
 }
 
