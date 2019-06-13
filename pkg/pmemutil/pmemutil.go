@@ -16,6 +16,7 @@ package pmemutil
 /*
 #cgo CFLAGS: -g -Wall
 #cgo LDFLAGS: -lpmemlog -lpmem
+#include <sys/stat.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@ package pmemutil
 
 // size of the pmemlog pool -- 64MB
 #define	PMEM_LEN 4096
+#define BUF_LEN 4096
 
 int byteToString(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
 	return pmemlog_append(plp, buf, len);
@@ -80,6 +82,49 @@ PMEMlogpool *pmemlogOpen(const char *path) {
 		exit(1);
 	}
 	return plp;
+}
+
+void copy(const char *source, const char *destination) {
+	int srcfd;
+	char *pmemaddr;
+        size_t mapped_len;
+        int is_pmem;
+	struct stat stbuf;
+
+	if ((srcfd = open(source, O_RDONLY)) < 0) {
+		perror(source);
+		exit(1);
+	}
+
+	if (fstat(srcfd, &stbuf) < 0) {
+		perror("fstat");
+		exit(1);
+	}
+
+        if ((pmemaddr = pmem_map_file(destination, stbuf.st_size,
+                                PMEM_FILE_CREATE|PMEM_FILE_EXCL,
+                                0666, &mapped_len, &is_pmem)) == NULL) {
+                perror("Error creating backup file on pmem");
+                exit(1);
+        }
+
+	char buf[BUF_LEN];
+	int cc;
+	
+	while ((cc = read(srcfd, buf, BUF_LEN)) > 0) {
+		pmem_memcpy_nodrain(pmemaddr, buf, cc);
+		pmemaddr += cc;
+	}
+
+	if (cc < 0) {
+		perror("Error reading source file while copying the source file from pmem");
+		exit(1);
+	}
+
+	pmem_drain();
+
+	close(srcfd);
+	pmem_unmap(pmemaddr, mapped_len);
 }
 */
 import "C"
@@ -158,6 +203,17 @@ func ZeroToEndForPmem(path string, f *os.File) error {
 
 	_, err = f.Seek(off, io.SeekStart)
 	return err
+}
+
+// Copy copies from source file to destination file in pmem
+func Copy(source, destination string) {
+	csource := C.CString(source)
+        defer C.free(unsafe.Pointer(csource))
+
+	cdestination := C.CString(destination)
+        defer C.free(unsafe.Pointer(cdestination))
+
+	C.copy(csource, cdestination)
 }
 
 // Resize resizes the pmem file. There was no better way found to resize.

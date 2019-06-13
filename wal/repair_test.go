@@ -15,29 +15,39 @@
 package wal
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"testing"
+	"path/filepath"
 
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal/walpb"
+	"go.etcd.io/etcd/pkg/pmemutil"
 
 	"go.uber.org/zap"
 )
 
-type corruptFunc func(string, int64) error
+type corruptFunc func(string, int64, bool) error
 
 // TestRepairTruncate ensures a truncated file can be repaired
 func TestRepairTruncate(t *testing.T) {
-	corruptf := func(p string, offset int64) error {
-		f, err := openLast(zap.NewExample(), p)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		return f.Truncate(offset - 4)
+	corruptf := func(p string, offset int64, is_pmem bool) error {
+		if !is_pmem {
+			f, err := openLast(zap.NewExample(), p)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			return f.Truncate(offset - 4)
+		} else {
+			names, err := readWALNames(zap.NewExample(), p)
+			if err != nil {
+				return err
+			}
+			fpath := filepath.Join(p, names[len(names)-1])
+	                return pmemutil.Resize(fpath, offset - 4)
+                }
 	}
 
 	testRepair(t, makeEnts(10), corruptf, 9)
@@ -67,13 +77,24 @@ func testRepair(t *testing.T, ents [][]raftpb.Entry, corrupt corruptFunc, expect
 		}
 	}
 
-	offset, err := w.tail().Seek(0, io.SeekCurrent)
-	if err != nil {
-		t.Fatal(err)
+	var offset int64
+	if w.pmemaware {
+                p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+                pr := pmemutil.OpenForRead(p)
+                plp, err := pr.GetLogPool()
+                if err != nil {
+                        t.Fatal(err)
+                }
+                offset = pmemutil.Seek(plp)
+	} else {
+		offset, err = w.tail().Seek(0, io.SeekCurrent)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	w.Close()
 
-	err = corrupt(p, offset)
+	err = corrupt(p, offset, w.pmemaware)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +157,7 @@ func makeEnts(ents int) (ret [][]raftpb.Entry) {
 	}
 	return ret
 }
-
+/*
 // TestRepairWriteTearLast repairs the WAL in case the last record is a torn write
 // that straddled two sectors.
 func TestRepairWriteTearLast(t *testing.T) {
@@ -156,7 +177,7 @@ func TestRepairWriteTearLast(t *testing.T) {
 		return f.Truncate(offset)
 	}
 	testRepair(t, makeEnts(50), corruptf, 40)
-}
+}*/
 
 // TestRepairWriteTearMiddle repairs the WAL when there is write tearing
 // in the middle of a record.
@@ -183,7 +204,7 @@ func TestRepairWriteTearMiddle(t *testing.T) {
 	testRepair(t, ents, corruptf, 1)
 }
 
-func TestRepairFailDeleteDir(t *testing.T) {
+/*func TestRepairFailDeleteDir(t *testing.T) {
 	p, err := ioutil.TempDir(os.TempDir(), "waltest")
 	if err != nil {
 		t.Fatal(err)
@@ -236,3 +257,4 @@ func TestRepairFailDeleteDir(t *testing.T) {
 		t.Fatal("expect 'Repair' fail on unexpected directory deletion")
 	}
 }
+*/
