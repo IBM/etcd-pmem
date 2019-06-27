@@ -785,13 +785,26 @@ func TestTailWriteNoSlackSpace(t *testing.T) {
 		}
 	}
 	// get rid of slack space by truncating file
-	off, serr := w.tail().Seek(0, io.SeekCurrent)
-	if serr != nil {
-		t.Fatal(serr)
-	}
-	if terr := w.tail().Truncate(off); terr != nil {
-		t.Fatal(terr)
-	}
+        if w.pmemaware {
+                p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+                pr := pmemutil.OpenForRead(p)
+                plp, err := pr.GetLogPool()
+                if err != nil {
+                        t.Fatal(err)
+                }
+                off := pmemutil.Seek(plp)
+                if err := pmemutil.Resize(p, off); err != nil {
+                        t.Fatal(err)
+                }
+        } else {
+                off, serr := w.tail().Seek(0, io.SeekCurrent)
+                if serr != nil {
+                        t.Fatal(serr)
+                }
+                if terr := w.tail().Truncate(off); terr != nil {
+                        t.Fatal(terr)
+                }
+        }
 	w.Close()
 
 	// open, write more
