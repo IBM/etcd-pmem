@@ -220,7 +220,7 @@ func Copy(source, destination string) {
 func Resize(filePath string, off int64) (err error) {
 	pr := OpenForRead(filePath)
 	data := make([]byte, off)
-	r, err := pr.Read(data)
+	r, err := pr.ReadTill(data, off)
 	if err != nil {
 		err = errors.New("Could not read data during resizing pmem file")
 		return err
@@ -247,7 +247,7 @@ func Resize(filePath string, off int64) (err error) {
 	}
 
 	if r != w {
-		err = errors.New("Could not write same bytes what were read.")
+		err = errors.New("Could not write same bytes what were read during resizing pmem file")
 		return err
 	}
 
@@ -337,7 +337,7 @@ func (pr *Pmemreader) GetLogPool() (plp Pmemlogpool, err error) {
 	return plp, err
 }
 
-// Reader reads data into b
+// Read reads data into b
 func (pr *Pmemreader) Read(b []byte) (n int, err error) {
 	cpath := C.CString(pr.path)
 	defer C.free(unsafe.Pointer(cpath))
@@ -360,6 +360,40 @@ func (pr *Pmemreader) Read(b []byte) (n int, err error) {
 	}
 	n = copy(b, s[pr.i:])
 	pr.i += int64(n)
+
+	return
+}
+
+// ReadTill reads data till offset into b
+func (pr *Pmemreader) ReadTill(b []byte, offset int64) (n int, err error) {
+	cpath := C.CString(pr.path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogOpen(cpath)
+	if plp == nil {
+		err = errors.New("Failed to open pmem file for read")
+	}
+	defer Close(plp)
+
+	length := C.pmemlog_tell(plp)
+
+	ptr := C.malloc(C.size_t(length))
+	defer C.free(unsafe.Pointer(ptr))
+
+	C.logprint(plp, (*C.uchar)(ptr))
+	s := C.GoBytes(ptr, C.int(length))
+	if pr.i >= int64(len(s)) {
+		return 0, io.EOF
+	}
+	n = copy(b, s[pr.i:])
+	pr.i += int64(n)
+
+	if int(offset) > n {
+		extend := make([]byte, int(offset)-n)
+		b = append(b, extend...)
+		n = int(offset)
+	}
+
 	return
 }
 

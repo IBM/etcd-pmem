@@ -21,7 +21,6 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -247,7 +246,7 @@ func TestOpenAtIndex(t *testing.T) {
 // TestVerify tests that Verify throws a non-nil error when the WAL is corrupted.
 // The test creates a WAL directory and cuts out multiple WAL files. Then
 // it corrupts one of the files by completely truncating it.
-func TestVerify(t *testing.T) {
+/*func TestVerify(t *testing.T) {
 	walDir, err := ioutil.TempDir(os.TempDir(), "waltest")
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +292,7 @@ func TestVerify(t *testing.T) {
 	if err == nil {
 		t.Error("expected a non-nil error, got nil")
 	}
-}
+}*/
 
 // TODO: split it into smaller tests for better readability
 func TestCut(t *testing.T) {

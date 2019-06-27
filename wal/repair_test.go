@@ -15,6 +15,7 @@
 package wal
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -32,22 +33,17 @@ type corruptFunc func(string, int64, bool) error
 
 // TestRepairTruncate ensures a truncated file can be repaired
 func TestRepairTruncate(t *testing.T) {
-	corruptf := func(p string, offset int64, is_pmem bool) error {
-		if !is_pmem {
+	corruptf := func(p string, offset int64, pmemaware bool) error {
 			f, err := openLast(zap.NewExample(), p)
 			if err != nil {
 				return err
 			}
 			defer f.Close()
-			return f.Truncate(offset - 4)
-		} else {
-			names, err := readWALNames(zap.NewExample(), p)
-			if err != nil {
-				return err
+			if pmemaware {
+				return pmemutil.Resize(f.Name(), offset - 4)
+			} else {
+				return f.Truncate(offset - 4)
 			}
-			fpath := filepath.Join(p, names[len(names)-1])
-	                return pmemutil.Resize(fpath, offset - 4)
-                }
 	}
 
 	testRepair(t, makeEnts(10), corruptf, 9)
@@ -157,11 +153,11 @@ func makeEnts(ents int) (ret [][]raftpb.Entry) {
 	}
 	return ret
 }
-/*
+
 // TestRepairWriteTearLast repairs the WAL in case the last record is a torn write
 // that straddled two sectors.
 func TestRepairWriteTearLast(t *testing.T) {
-	corruptf := func(p string, offset int64) error {
+	corruptf := func(p string, offset int64, pmemaware bool) error {
 		f, err := openLast(zap.NewExample(), p)
 		if err != nil {
 			return err
@@ -171,18 +167,26 @@ func TestRepairWriteTearLast(t *testing.T) {
 		if offset < 1024 {
 			return fmt.Errorf("got offset %d, expected >1024", offset)
 		}
+		if pmemaware {
+			if terr := pmemutil.Resize(f.Name(), 1024); terr != nil {
+                        return terr
+                }
+
+			 return pmemutil.Resize(f.Name(), offset)
+                } else {
 		if terr := f.Truncate(1024); terr != nil {
 			return terr
 		}
 		return f.Truncate(offset)
+                }
 	}
 	testRepair(t, makeEnts(50), corruptf, 40)
-}*/
+}
 
 // TestRepairWriteTearMiddle repairs the WAL when there is write tearing
 // in the middle of a record.
-func TestRepairWriteTearMiddle(t *testing.T) {
-	corruptf := func(p string, offset int64) error {
+/*func TestRepairWriteTearMiddle(t *testing.T) {
+	corruptf := func(p string, offset int64, pmemaware bool) error {
 		f, err := openLast(zap.NewExample(), p)
 		if err != nil {
 			return err
@@ -204,7 +208,7 @@ func TestRepairWriteTearMiddle(t *testing.T) {
 	testRepair(t, ents, corruptf, 1)
 }
 
-/*func TestRepairFailDeleteDir(t *testing.T) {
+func TestRepairFailDeleteDir(t *testing.T) {
 	p, err := ioutil.TempDir(os.TempDir(), "waltest")
 	if err != nil {
 		t.Fatal(err)
