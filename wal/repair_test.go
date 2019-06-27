@@ -185,7 +185,7 @@ func TestRepairWriteTearLast(t *testing.T) {
 
 // TestRepairWriteTearMiddle repairs the WAL when there is write tearing
 // in the middle of a record.
-/*func TestRepairWriteTearMiddle(t *testing.T) {
+func TestRepairWriteTearMiddle(t *testing.T) {
 	corruptf := func(p string, offset int64, pmemaware bool) error {
 		f, err := openLast(zap.NewExample(), p)
 		if err != nil {
@@ -220,6 +220,9 @@ func TestRepairFailDeleteDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// If pmemaware then save the flag
+	pmemaware := w.pmemaware
+
 	oldSegmentSizeBytes := SegmentSizeBytes
 	SegmentSizeBytes = 64
 	defer func() {
@@ -241,9 +244,15 @@ func TestRepairFailDeleteDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if pmemaware {
+		if terr := pmemutil.Resize(f.Name(), 20); terr != nil {
+                t.Fatal(err)
+        }
+} else {
 	if terr := f.Truncate(20); terr != nil {
 		t.Fatal(err)
 	}
+}
 	f.Close()
 
 	w, err = Open(zap.NewExample(), p, walpb.Snapshot{})
@@ -261,4 +270,3 @@ func TestRepairFailDeleteDir(t *testing.T) {
 		t.Fatal("expect 'Repair' fail on unexpected directory deletion")
 	}
 }
-*/
