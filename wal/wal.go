@@ -102,6 +102,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
+
 	var f *fileutil.LockedFile
 
 	// keep temporary wal directory so WAL initialization appears atomic
@@ -132,12 +133,13 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	// Form the path for temporary wal file
 	p := filepath.Join(tmpdirpath, walName(0, 0))
 
-	// Check if the current location is in pmem
-	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
+	// Check if the dirpath is in pmem
+	pmemaware, err := pmemutil.IsPmemTrue(tmpdirpath)
 	if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}
 	pmemaware = true
+
 	if pmemaware {
 		w.pmemaware = pmemaware
 
