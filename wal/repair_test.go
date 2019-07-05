@@ -168,11 +168,7 @@ func TestRepairWriteTearLast(t *testing.T) {
 			return fmt.Errorf("got offset %d, expected >1024", offset)
 		}
 		if pmemaware {
-			if terr := pmemutil.Resize(f.Name(), 1024); terr != nil {
-                        return terr
-                }
-
-			 return pmemutil.Resize(f.Name(), offset)
+			 return pmemutil.WriteInMiddle(f.Name(), make([]byte, offset-1024), 1024)
                 } else {
 		if terr := f.Truncate(1024); terr != nil {
 			return terr
@@ -193,8 +189,12 @@ func TestRepairWriteTearMiddle(t *testing.T) {
 		}
 		defer f.Close()
 		// corrupt middle of 2nd record
-		_, werr := f.WriteAt(make([]byte, 512), 4096+512)
-		return werr
+		if pmemaware {
+			return pmemutil.WriteInMiddle(f.Name(), make([]byte, 512), 4096+512)
+		} else {
+			_, werr := f.WriteAt(make([]byte, 512), 4096+512)
+                	return werr
+		}
 	}
 	ents := makeEnts(5)
 	// 4096 bytes of data so a middle sector is easy to corrupt

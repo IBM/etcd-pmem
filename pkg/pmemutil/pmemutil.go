@@ -17,8 +17,10 @@ package pmemutil
 #cgo CFLAGS: -g -Wall
 #cgo LDFLAGS: -lpmemlog -lpmem
 #include <sys/stat.h>
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -32,6 +34,10 @@ package pmemutil
 
 int byteToString(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
 	return pmemlog_append(plp, buf, len);
+}
+
+int WriteInMiddle(PMEMlogpool *plp, const unsigned char *buf, size_t len, unsigned long long write_offset) {
+	return pmemlog_append_at_offset(plp, buf, len, write_offset);
 }
 
 static int
@@ -59,6 +65,37 @@ int IsPmemTrue(char *path) {
 
 	pmem_unmap(pmemaddr, mapped_len);
 	return is_pmem;
+}
+
+void WriteInMiddlese(char *path, unsigned char *buf, size_t len, unsigned int offset) {
+	int srcfd;
+	struct stat stbuf;
+	char *pmemaddr;
+        size_t mapped_len;
+        int is_pmem;
+
+	if ((srcfd = open(path, O_RDONLY)) < 0) {
+		perror(path);
+		exit(1);
+	}
+
+	if (fstat(srcfd, &stbuf) < 0) {
+		perror("fstat");
+		exit(1);
+	}
+
+	close(srcfd);
+
+	if ((pmemaddr = pmem_map_file(path, stbuf.st_size,
+                                PMEM_FILE_CREATE,
+                                0666, &mapped_len, &is_pmem)) == NULL) {
+                perror("Error - Could not write at middle of pmem file");
+                exit(1);
+        }
+
+	pmem_memcpy_persist(pmemaddr+offset, buf, len);
+
+	pmem_unmap(pmemaddr, mapped_len);
 }
 
 PMEMlogpool *pmemlogCreateOrOpen(char *path, size_t poolSize, unsigned int mode) {
@@ -168,6 +205,29 @@ func IsPmemTrue(dirpath string) (bool, error) {
 	return true, err
 }
 
+func WriteInMiddle(path string, b []byte, off uint) (err error) {
+	cpath := C.CString(path)
+        defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogOpen(cpath)
+        if plp == nil {
+                err = errors.New("Failed to open pmem file for write")
+        }
+        defer Close(plp)
+
+	ptr := C.malloc(C.size_t(len(b)))
+        defer C.free(unsafe.Pointer(ptr))
+
+        copy((*[1 << 24]byte)(ptr)[0:len(b)], b)
+        cdata := C.CBytes(b)
+        defer C.free(unsafe.Pointer(cdata))
+
+	if (int(C.WriteInMiddle(plp, (*C.uchar)(cdata), C.size_t(len(b)), (C.ulonglong)(off))) < 0) {
+		err = errors.New("Could not write at the specified offset in pmemlog file")
+	}
+	return err
+}
+
 // InitiatePmemLogPool initiates a log pool
 func InitiatePmemLogPool(path string, poolSize int64) (err error) {
 	cpath := C.CString(path)
@@ -220,10 +280,16 @@ func Copy(source, destination string) {
 func Resize(filePath string, off int64) (err error) {
 	pr := OpenForRead(filePath)
 	data := make([]byte, off)
-	r, err := pr.ReadTill(data, off)
+	r, err := pr.Read(data)
 	if err != nil {
 		err = errors.New("Could not read data during resizing pmem file")
 		return err
+	}
+
+	if off > int64(r) {
+		extend := make([]byte, off-int64(r))
+		data = append(data, extend...)
+		r = len(data)
 	}
 
 	err = os.Remove(filePath)
@@ -358,41 +424,9 @@ func (pr *Pmemreader) Read(b []byte) (n int, err error) {
 	if pr.i >= int64(len(s)) {
 		return 0, io.EOF
 	}
+
 	n = copy(b, s[pr.i:])
 	pr.i += int64(n)
-
-	return
-}
-
-// ReadTill reads data till offset into b
-func (pr *Pmemreader) ReadTill(b []byte, offset int64) (n int, err error) {
-	cpath := C.CString(pr.path)
-	defer C.free(unsafe.Pointer(cpath))
-
-	plp := C.pmemlogOpen(cpath)
-	if plp == nil {
-		err = errors.New("Failed to open pmem file for read")
-	}
-	defer Close(plp)
-
-	length := C.pmemlog_tell(plp)
-
-	ptr := C.malloc(C.size_t(length))
-	defer C.free(unsafe.Pointer(ptr))
-
-	C.logprint(plp, (*C.uchar)(ptr))
-	s := C.GoBytes(ptr, C.int(length))
-	if pr.i >= int64(len(s)) {
-		return 0, io.EOF
-	}
-	n = copy(b, s[pr.i:])
-	pr.i += int64(n)
-
-	if int(offset) > n {
-		extend := make([]byte, int(offset)-n)
-		b = append(b, extend...)
-		n = int(offset)
-	}
 
 	return
 }
