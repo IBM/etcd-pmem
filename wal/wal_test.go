@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -246,7 +247,7 @@ func TestOpenAtIndex(t *testing.T) {
 // TestVerify tests that Verify throws a non-nil error when the WAL is corrupted.
 // The test creates a WAL directory and cuts out multiple WAL files. Then
 // it corrupts one of the files by completely truncating it.
-/*func TestVerify(t *testing.T) {
+func TestVerify(t *testing.T) {
 	walDir, err := ioutil.TempDir(os.TempDir(), "waltest")
 	if err != nil {
 		t.Fatal(err)
@@ -259,6 +260,9 @@ func TestOpenAtIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+
+	// save the storage device type for future use
+	pmemaware := w.pmemaware
 
 	// make 5 separate files
 	for i := 0; i < 5; i++ {
@@ -283,7 +287,12 @@ func TestOpenAtIndex(t *testing.T) {
 	}
 
 	// corrupt the WAL by truncating one of the WAL files completely
-	err = os.Truncate(path.Join(walDir, walFiles[2].Name()), 0)
+	if pmemaware {
+		pw := pmemutil.OpenForWrite(path.Join(walDir, walFiles[2].Name()))
+		err = pw.Rewind()
+	} else {
+		err = os.Truncate(path.Join(walDir, walFiles[2].Name()), 0)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +301,7 @@ func TestOpenAtIndex(t *testing.T) {
 	if err == nil {
 		t.Error("expected a non-nil error, got nil")
 	}
-}*/
+}
 
 // TODO: split it into smaller tests for better readability
 func TestCut(t *testing.T) {
@@ -307,6 +316,9 @@ func TestCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+
+	// save the storage device type for future use
+	pmemaware := w.pmemaware
 
 	state := raftpb.HardState{Term: 1}
 	if err = w.Save(state, nil); err != nil {
@@ -340,11 +352,6 @@ func TestCut(t *testing.T) {
 	// We do check before closing the WAL to ensure that Cut syncs the data
 	// into the disk.
 	var f io.ReadCloser
-	pmemaware, err := pmemutil.IsPmemTrue(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pmemaware = true
 	if pmemaware {
 		f = pmemutil.OpenForRead(filepath.Join(p, wname))
 	} else {
@@ -784,26 +791,26 @@ func TestTailWriteNoSlackSpace(t *testing.T) {
 		}
 	}
 	// get rid of slack space by truncating file
-        if w.pmemaware {
-                p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
-                pr := pmemutil.OpenForRead(p)
-                plp, err := pr.GetLogPool()
-                if err != nil {
-                        t.Fatal(err)
-                }
-                off := pmemutil.Seek(plp)
-                if err := pmemutil.Resize(p, off); err != nil {
-                        t.Fatal(err)
-                }
-        } else {
-                off, serr := w.tail().Seek(0, io.SeekCurrent)
-                if serr != nil {
-                        t.Fatal(serr)
-                }
-                if terr := w.tail().Truncate(off); terr != nil {
-                        t.Fatal(terr)
-                }
-        }
+	if w.pmemaware {
+		p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+		pr := pmemutil.OpenForRead(p)
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		off := pmemutil.Seek(plp)
+		if err := pmemutil.Resize(p, off); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		off, serr := w.tail().Seek(0, io.SeekCurrent)
+		if serr != nil {
+			t.Fatal(serr)
+		}
+		if terr := w.tail().Truncate(off); terr != nil {
+			t.Fatal(terr)
+		}
+	}
 	w.Close()
 
 	// open, write more

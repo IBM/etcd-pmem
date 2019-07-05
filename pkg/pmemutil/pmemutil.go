@@ -67,37 +67,6 @@ int IsPmemTrue(char *path) {
 	return is_pmem;
 }
 
-void WriteInMiddlese(char *path, unsigned char *buf, size_t len, unsigned int offset) {
-	int srcfd;
-	struct stat stbuf;
-	char *pmemaddr;
-        size_t mapped_len;
-        int is_pmem;
-
-	if ((srcfd = open(path, O_RDONLY)) < 0) {
-		perror(path);
-		exit(1);
-	}
-
-	if (fstat(srcfd, &stbuf) < 0) {
-		perror("fstat");
-		exit(1);
-	}
-
-	close(srcfd);
-
-	if ((pmemaddr = pmem_map_file(path, stbuf.st_size,
-                                PMEM_FILE_CREATE,
-                                0666, &mapped_len, &is_pmem)) == NULL) {
-                perror("Error - Could not write at middle of pmem file");
-                exit(1);
-        }
-
-	pmem_memcpy_persist(pmemaddr+offset, buf, len);
-
-	pmem_unmap(pmemaddr, mapped_len);
-}
-
 PMEMlogpool *pmemlogCreateOrOpen(char *path, size_t poolSize, unsigned int mode) {
 	PMEMlogpool *plp;
 	plp= pmemlog_create(path, poolSize, mode);
@@ -147,7 +116,7 @@ void copy(const char *source, const char *destination) {
 
 	char buf[BUF_LEN];
 	int cc;
-	
+
 	while ((cc = read(srcfd, buf, BUF_LEN)) > 0) {
 		pmem_memcpy_nodrain(pmemaddr, buf, cc);
 		pmemaddr += cc;
@@ -207,22 +176,22 @@ func IsPmemTrue(dirpath string) (bool, error) {
 
 func WriteInMiddle(path string, b []byte, off uint) (err error) {
 	cpath := C.CString(path)
-        defer C.free(unsafe.Pointer(cpath))
+	defer C.free(unsafe.Pointer(cpath))
 
 	plp := C.pmemlogOpen(cpath)
-        if plp == nil {
-                err = errors.New("Failed to open pmem file for write")
-        }
-        defer Close(plp)
+	if plp == nil {
+		err = errors.New("Failed to open pmem file for write")
+	}
+	defer Close(plp)
 
 	ptr := C.malloc(C.size_t(len(b)))
-        defer C.free(unsafe.Pointer(ptr))
+	defer C.free(unsafe.Pointer(ptr))
 
-        copy((*[1 << 24]byte)(ptr)[0:len(b)], b)
-        cdata := C.CBytes(b)
-        defer C.free(unsafe.Pointer(cdata))
+	copy((*[1 << 24]byte)(ptr)[0:len(b)], b)
+	cdata := C.CBytes(b)
+	defer C.free(unsafe.Pointer(cdata))
 
-	if (int(C.WriteInMiddle(plp, (*C.uchar)(cdata), C.size_t(len(b)), (C.ulonglong)(off))) < 0) {
+	if int(C.WriteInMiddle(plp, (*C.uchar)(cdata), C.size_t(len(b)), (C.ulonglong)(off))) < 0 {
 		err = errors.New("Could not write at the specified offset in pmemlog file")
 	}
 	return err
@@ -268,10 +237,10 @@ func ZeroToEndForPmem(path string, f *os.File) error {
 // Copy copies from source file to destination file in pmem
 func Copy(source, destination string) {
 	csource := C.CString(source)
-        defer C.free(unsafe.Pointer(csource))
+	defer C.free(unsafe.Pointer(csource))
 
 	cdestination := C.CString(destination)
-        defer C.free(unsafe.Pointer(cdestination))
+	defer C.free(unsafe.Pointer(cdestination))
 
 	C.copy(csource, cdestination)
 }
@@ -348,6 +317,21 @@ func (pw *Pmemwriter) GetLogPool() (plp Pmemlogpool, err error) {
 		err = errors.New("Failed to open pmem file")
 	}
 	return plp, err
+}
+
+// Rewind discards all data and reset the log memory pool to empty
+func (pw *Pmemwriter) Rewind() (err error) {
+	cpath := C.CString(pw.path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogOpen(cpath)
+	if plp == nil {
+		err = errors.New("Failed to open pmem file for rewind")
+	}
+	defer Close(plp)
+
+	C.pmemlog_rewind(plp)
+	return
 }
 
 // Write writes len(b) bytes to the pmem buffer

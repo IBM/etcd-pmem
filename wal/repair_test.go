@@ -19,12 +19,12 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"testing"
 	"path/filepath"
+	"testing"
 
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal/walpb"
-	"go.etcd.io/etcd/pkg/pmemutil"
 
 	"go.uber.org/zap"
 )
@@ -34,16 +34,16 @@ type corruptFunc func(string, int64, bool) error
 // TestRepairTruncate ensures a truncated file can be repaired
 func TestRepairTruncate(t *testing.T) {
 	corruptf := func(p string, offset int64, pmemaware bool) error {
-			f, err := openLast(zap.NewExample(), p)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			if pmemaware {
-				return pmemutil.Resize(f.Name(), offset - 4)
-			} else {
-				return f.Truncate(offset - 4)
-			}
+		f, err := openLast(zap.NewExample(), p)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if pmemaware {
+			return pmemutil.Resize(f.Name(), offset-4)
+		} else {
+			return f.Truncate(offset - 4)
+		}
 	}
 
 	testRepair(t, makeEnts(10), corruptf, 9)
@@ -75,13 +75,13 @@ func testRepair(t *testing.T, ents [][]raftpb.Entry, corrupt corruptFunc, expect
 
 	var offset int64
 	if w.pmemaware {
-                p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
-                pr := pmemutil.OpenForRead(p)
-                plp, err := pr.GetLogPool()
-                if err != nil {
-                        t.Fatal(err)
-                }
-                offset = pmemutil.Seek(plp)
+		p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+		pr := pmemutil.OpenForRead(p)
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		offset = pmemutil.Seek(plp)
 	} else {
 		offset, err = w.tail().Seek(0, io.SeekCurrent)
 		if err != nil {
@@ -168,13 +168,13 @@ func TestRepairWriteTearLast(t *testing.T) {
 			return fmt.Errorf("got offset %d, expected >1024", offset)
 		}
 		if pmemaware {
-			 return pmemutil.WriteInMiddle(f.Name(), make([]byte, offset-1024), 1024)
-                } else {
-		if terr := f.Truncate(1024); terr != nil {
-			return terr
+			return pmemutil.WriteInMiddle(f.Name(), make([]byte, offset-1024), 1024)
+		} else {
+			if terr := f.Truncate(1024); terr != nil {
+				return terr
+			}
+			return f.Truncate(offset)
 		}
-		return f.Truncate(offset)
-                }
 	}
 	testRepair(t, makeEnts(50), corruptf, 40)
 }
@@ -193,7 +193,7 @@ func TestRepairWriteTearMiddle(t *testing.T) {
 			return pmemutil.WriteInMiddle(f.Name(), make([]byte, 512), 4096+512)
 		} else {
 			_, werr := f.WriteAt(make([]byte, 512), 4096+512)
-                	return werr
+			return werr
 		}
 	}
 	ents := makeEnts(5)
@@ -246,13 +246,13 @@ func TestRepairFailDeleteDir(t *testing.T) {
 	}
 	if pmemaware {
 		if terr := pmemutil.Resize(f.Name(), 20); terr != nil {
-                t.Fatal(err)
-        }
-} else {
-	if terr := f.Truncate(20); terr != nil {
-		t.Fatal(err)
+			t.Fatal(err)
+		}
+	} else {
+		if terr := f.Truncate(20); terr != nil {
+			t.Fatal(err)
+		}
 	}
-}
 	f.Close()
 
 	w, err = Open(zap.NewExample(), p, walpb.Snapshot{})
