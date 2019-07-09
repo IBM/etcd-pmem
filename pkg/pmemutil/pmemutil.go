@@ -1,4 +1,4 @@
-// Copyright 2015 The etcd Authors
+// Copyright 2019 The etcd Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,11 +28,10 @@ package pmemutil
 #include "libpmem.h"
 #include <libpmemlog.h>
 
-// size of the pmemlog pool -- 64MB
 #define	PMEM_LEN 4096
 #define BUF_LEN 4096
 
-int byteToString(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
+int append(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
 	return pmemlog_append(plp, buf, len);
 }
 
@@ -40,8 +39,7 @@ int WriteInMiddle(PMEMlogpool *plp, const unsigned char *buf, size_t len, unsign
 	return pmemlog_append_at_offset(plp, buf, len, write_offset);
 }
 
-static int
-printit(const void *buf, size_t len, void *arg)
+static int printit(const void *buf, size_t len, void *arg)
 {
 	memcpy(arg, buf, len);
 	return 0;
@@ -174,6 +172,7 @@ func IsPmemTrue(dirpath string) (bool, error) {
 	return true, err
 }
 
+// WriteInMiddle appends bytes at any offset of pmemlog
 func WriteInMiddle(path string, b []byte, off uint) (err error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
@@ -353,7 +352,7 @@ func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
 	defer C.free(unsafe.Pointer(cdata))
 
 	if plp != nil {
-		if int(C.byteToString(plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
+		if int(C.append(plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
 			err = errors.New("Log could not be appended in pmem")
 		}
 	}
