@@ -32,7 +32,12 @@ package pmemutil
 #define BUF_LEN 4096
 
 int append(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
-	return pmemlog_append(plp, buf, len);
+	int ap = pmemlog_append(plp, buf, len);
+	if (ap < 0) {
+		perror("Error while appending the log - ");
+	}
+
+	return ap;
 }
 
 int WriteInMiddle(PMEMlogpool *plp, const unsigned char *buf, size_t len, unsigned long long write_offset) {
