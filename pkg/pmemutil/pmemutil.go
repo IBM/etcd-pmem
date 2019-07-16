@@ -353,11 +353,9 @@ func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
 	defer C.free(unsafe.Pointer(ptr))
 
 	copy((*[1 << 24]byte)(ptr)[0:len(b)], b)
-	cdata := C.CBytes(b)
-	defer C.free(unsafe.Pointer(cdata))
 
 	if plp != nil {
-		if int(C.append(plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
+		if int(C.append(plp, (*C.uchar)(ptr), C.size_t(len(string(b))))) < 0 {
 			err = errors.New("Log could not be appended in pmem")
 		}
 	}
