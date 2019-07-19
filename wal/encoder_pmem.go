@@ -13,7 +13,7 @@
 // limitations under the License.
 
 
-// +build !pmem
+// +build pmem
 
 
 package wal
@@ -22,11 +22,12 @@ import (
 	"encoding/binary"
 	"hash"
 	"io"
-	"os"
 	"sync"
+	"os"
 
 	"go.etcd.io/etcd/pkg/crc"
 	"go.etcd.io/etcd/pkg/ioutil"
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/wal/walpb"
 )
 
@@ -44,6 +45,7 @@ type encoder struct {
 	uint64buf []byte
 }
 
+
 func newEncoder(w io.Writer, prevCrc uint32, pageOffset int) *encoder {
 	return &encoder{
 		bw:  ioutil.NewPageWriter(w, walPageBytes, pageOffset),
@@ -54,6 +56,7 @@ func newEncoder(w io.Writer, prevCrc uint32, pageOffset int) *encoder {
 	}
 }
 
+
 // newFileEncoder creates a new encoder with current file offset for the page writer.
 func newFileEncoder(f *os.File, prevCrc uint32) (*encoder, error) {
 	offset, err := f.Seek(0, io.SeekCurrent)
@@ -61,6 +64,23 @@ func newFileEncoder(f *os.File, prevCrc uint32) (*encoder, error) {
 		return nil, err
 	}
 	return newEncoder(f, prevCrc, int(offset)), nil
+}
+
+// newPmemEncoder creates a new encoder with current file offset for the page writer.
+func newPmemEncoder(path string, prevCrc uint32) (*encoder, error) {
+	pw := pmemutil.OpenForWrite(path)
+	plp, err := pw.GetLogPool()
+	if err != nil {
+		return nil, err
+	}
+
+	offset := pmemutil.Seek(plp)
+	return newEncoder(pw, prevCrc, int(offset)), nil
+}
+
+func updateEncoderForPmem(path string, enc *encoder) {
+	pw := pmemutil.OpenForWrite(path)
+	enc.bw = ioutil.NewPageWriter(pw, walPageBytes, 0)
 }
 
 func (e *encoder) encode(rec *walpb.Record) error {

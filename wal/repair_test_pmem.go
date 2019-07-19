@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !pmem
+// +build pmem
 
 package wal
 
@@ -21,8 +21,10 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal/walpb"
 
@@ -33,13 +35,17 @@ type corruptFunc func(string, int64, bool) error
 
 // TestRepairTruncate ensures a truncated file can be repaired
 func TestRepairTruncate(t *testing.T) {
-	corruptf := func(p string, offset int64) error {
+	corruptf := func(p string, offset int64, pmemaware bool) error {
 		f, err := openLast(zap.NewExample(), p)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
-		return f.Truncate(offset - 4)
+		if pmemaware {
+			return pmemutil.Resize(f.Name(), offset-4)
+		} else {
+			return f.Truncate(offset - 4)
+		}
 	}
 
 	testRepair(t, makeEnts(10), corruptf, 9)
@@ -69,13 +75,24 @@ func testRepair(t *testing.T, ents [][]raftpb.Entry, corrupt corruptFunc, expect
 		}
 	}
 
-	offset, err := w.tail().Seek(0, io.SeekCurrent)
-	if err != nil {
-		t.Fatal(err)
+	var offset int64
+	if w.pmemaware {
+		p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+		pr := pmemutil.OpenForRead(p)
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		offset = pmemutil.Seek(plp)
+	} else {
+		offset, err = w.tail().Seek(0, io.SeekCurrent)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	w.Close()
 
-	err = corrupt(p, offset)
+	err = corrupt(p, offset, w.pmemaware)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +159,7 @@ func makeEnts(ents int) (ret [][]raftpb.Entry) {
 // TestRepairWriteTearLast repairs the WAL in case the last record is a torn write
 // that straddled two sectors.
 func TestRepairWriteTearLast(t *testing.T) {
-	corruptf := func(p string, offset int64) error {
+	corruptf := func(p string, offset int64, pmemaware bool) error {
 		f, err := openLast(zap.NewExample(), p)
 		if err != nil {
 			return err
@@ -152,11 +169,14 @@ func TestRepairWriteTearLast(t *testing.T) {
 		if offset < 1024 {
 			return fmt.Errorf("got offset %d, expected >1024", offset)
 		}
-
-		if terr := f.Truncate(1024); terr != nil {
-			return terr
+		if pmemaware {
+			return pmemutil.WriteInMiddle(f.Name(), make([]byte, offset-1024), 1024)
+		} else {
+			if terr := f.Truncate(1024); terr != nil {
+				return terr
+			}
+			return f.Truncate(offset)
 		}
-		return f.Truncate(offset)
 	}
 	testRepair(t, makeEnts(50), corruptf, 40)
 }
@@ -164,15 +184,19 @@ func TestRepairWriteTearLast(t *testing.T) {
 // TestRepairWriteTearMiddle repairs the WAL when there is write tearing
 // in the middle of a record.
 func TestRepairWriteTearMiddle(t *testing.T) {
-	corruptf := func(p string, offset int64) error {
+	corruptf := func(p string, offset int64, pmemaware bool) error {
 		f, err := openLast(zap.NewExample(), p)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
 		// corrupt middle of 2nd record
-		_, werr := f.WriteAt(make([]byte, 512), 4096+512)
-		return werr
+		if pmemaware {
+			return pmemutil.WriteInMiddle(f.Name(), make([]byte, 512), 4096+512)
+		} else {
+			_, werr := f.WriteAt(make([]byte, 512), 4096+512)
+			return werr
+		}
 	}
 	ents := makeEnts(5)
 	// 4096 bytes of data so a middle sector is easy to corrupt
@@ -198,6 +222,9 @@ func TestRepairFailDeleteDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// If pmemaware then save the flag
+	pmemaware := w.pmemaware
+
 	oldSegmentSizeBytes := SegmentSizeBytes
 	SegmentSizeBytes = 64
 	defer func() {
@@ -219,11 +246,15 @@ func TestRepairFailDeleteDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if terr := f.Truncate(20); terr != nil {
-		t.Fatal(err)
+	if pmemaware {
+		if terr := pmemutil.Resize(f.Name(), 20); terr != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if terr := f.Truncate(20); terr != nil {
+			t.Fatal(err)
+		}
 	}
-
 	f.Close()
 
 	w, err = Open(zap.NewExample(), p, walpb.Snapshot{})

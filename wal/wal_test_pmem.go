@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !pmem
+// +build pmem
 
 package wal
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math"
@@ -26,11 +25,11 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"testing"
 
 	"go.etcd.io/etcd/pkg/fileutil"
 	"go.etcd.io/etcd/pkg/pbutil"
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal/walpb"
 
@@ -53,10 +52,38 @@ func TestNew(t *testing.T) {
 	}
 	defer w.Close()
 
-	gd := make([]byte, off)
-	f, err := os.Open(filepath.Join(p, filepath.Base(w.tail().Name())))
+	var gd []byte
+	pmemaware, err := pmemutil.IsPmemTrue(p)
 	if err != nil {
 		t.Fatal(err)
+	}
+	pmemaware = true
+
+	var f io.ReadCloser
+	if pmemaware {
+		pr := pmemutil.OpenForRead(filepath.Join(p, filepath.Base(w.tail().Name())))
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// file is preallocated to segment size; only read data written by wal
+		off := pmemutil.Seek(plp)
+		gd = make([]byte, off)
+
+		f = pr
+	} else {
+		// file is preallocated to segment size; only read data written by wal
+		off, err := w.tail().Seek(0, io.SeekCurrent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gd = make([]byte, off)
+
+		f, err = os.Open(filepath.Join(p, filepath.Base(w.tail().Name())))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	defer f.Close()
 	if _, err = io.ReadFull(f, gd); err != nil {
@@ -97,37 +124,6 @@ func TestCreateFailFromPollutedDir(t *testing.T) {
 	_, err = Create(zap.NewExample(), p, []byte("data"))
 	if err != os.ErrExist {
 		t.Fatalf("expected %v, got %v", os.ErrExist, err)
-	}
-}
-
-func TestWalCleanup(t *testing.T) {
-	testRoot, err := ioutil.TempDir(os.TempDir(), "waltestroot")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := ioutil.TempDir(testRoot, "waltest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(testRoot)
-
-	logger := zap.NewExample()
-	w, err := Create(logger, p, []byte(""))
-	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	w.cleanupWAL(logger)
-	fnames, err := fileutil.ReadDir(testRoot)
-	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	if len(fnames) != 1 {
-		t.Fatalf("expected 1 file under %v, got %v", testRoot, len(fnames))
-	}
-	pattern := fmt.Sprintf(`%s.broken\.[\d]{8}\.[\d]{6}\.[\d]{1,6}?`, filepath.Base(p))
-	match, _ := regexp.MatchString(pattern, fnames[0])
-	if !match {
-		t.Errorf("match = false, expected true for %v with pattern %v", fnames[0], pattern)
 	}
 }
 
@@ -234,6 +230,9 @@ func TestVerify(t *testing.T) {
 	}
 	defer w.Close()
 
+	// save the storage device type for future use
+	pmemaware := w.pmemaware
+
 	// make 5 separate files
 	for i := 0; i < 5; i++ {
 		es := []raftpb.Entry{{Index: uint64(i), Data: []byte("waldata" + string(i+1))}}
@@ -256,7 +255,13 @@ func TestVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = os.Truncate(path.Join(walDir, walFiles[2].Name()), 0)
+	// corrupt the WAL by truncating one of the WAL files completely
+	if pmemaware {
+		pw := pmemutil.OpenForWrite(path.Join(walDir, walFiles[2].Name()))
+		err = pw.Rewind()
+	} else {
+		err = os.Truncate(path.Join(walDir, walFiles[2].Name()), 0)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +285,9 @@ func TestCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+
+	// save the storage device type for future use
+	pmemaware := w.pmemaware
 
 	state := raftpb.HardState{Term: 1}
 	if err = w.Save(state, nil); err != nil {
@@ -312,11 +320,16 @@ func TestCut(t *testing.T) {
 	// check the state in the last WAL
 	// We do check before closing the WAL to ensure that Cut syncs the data
 	// into the disk.
-	f, err := os.Open(filepath.Join(p, wname))
-	if err != nil {
-		t.Fatal(err)
+	var f io.ReadCloser
+	if pmemaware {
+		f = pmemutil.OpenForRead(filepath.Join(p, wname))
+	} else {
+		f, err = os.Open(filepath.Join(p, wname))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
 	}
-	defer f.Close()
 	nw := &WAL{
 		decoder: newDecoder(f),
 		start:   snap,
@@ -746,12 +759,26 @@ func TestTailWriteNoSlackSpace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	off, serr := w.tail().Seek(0, io.SeekCurrent)
-	if serr != nil {
-		t.Fatal(serr)
-	}
-	if terr := w.tail().Truncate(off); terr != nil {
-		t.Fatal(terr)
+	// get rid of slack space by truncating file
+	if w.pmemaware {
+		p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+		pr := pmemutil.OpenForRead(p)
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		off := pmemutil.Seek(plp)
+		if err := pmemutil.Resize(p, off); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		off, serr := w.tail().Seek(0, io.SeekCurrent)
+		if serr != nil {
+			t.Fatal(serr)
+		}
+		if terr := w.tail().Truncate(off); terr != nil {
+			t.Fatal(terr)
+		}
 	}
 	w.Close()
 
