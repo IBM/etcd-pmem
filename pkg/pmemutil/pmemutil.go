@@ -70,15 +70,12 @@ int IsPmemTrue(char *path) {
 	return is_pmem;
 }
 
-PMEMlogpool *pmemlogCreateOrOpen(char *path, size_t poolSize, unsigned int mode) {
+PMEMlogpool *pmemlogCreate(char *path, size_t poolSize, unsigned int mode) {
 	PMEMlogpool *plp;
 	plp= pmemlog_create(path, poolSize, mode);
 	if (plp == NULL) {
 		perror(path);
-		plp = pmemlog_open(path);
-	}
-	if (plp == NULL) {
-		perror(path);
+		exit(1);
 	}
 	return plp;
 }
@@ -206,7 +203,7 @@ func InitiatePmemLogPool(path string, poolSize int64) (err error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
-	plp := C.pmemlogCreateOrOpen(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
+	plp := C.pmemlogCreate(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
 	if plp == nil {
 		err = errors.New("Failed to open pmem file")
 	}

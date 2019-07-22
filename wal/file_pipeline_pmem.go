@@ -96,20 +96,22 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			return nil, err
 		}
 	} else {
-		err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
+		if !fileutil.Exist(fpath) {
+		    err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
 		if err != nil {
 			if fp.lg != nil {
 				fp.lg.Warn(
-					"failed to create an initial WAL file in pmem",
+					"failed to create an new WAL file in pmem",
 					zap.String("path", fpath),
 					zap.Error(err),
 				)
 			}
 			return nil, err
-		}
+		    }
+                }
 
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
-		f, err = fileutil.LockFile(fpath, os.O_RDWR, fileutil.PrivateFileMode)
+		f, err = fileutil.LockFile(fpath, os.O_WRONLY, fileutil.PrivateFileMode)
 		if err != nil {
 			if fp.lg != nil {
 				fp.lg.Warn(
