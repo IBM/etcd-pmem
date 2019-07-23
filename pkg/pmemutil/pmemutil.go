@@ -203,6 +203,9 @@ func InitiatePmemLogPool(path string, poolSize int64) (err error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
+	// Adding 2MB extrasize for Storing the Logfile Metadata
+	poolSize = poolSize + (2 * 1024 * 1024)
+
 	plp := C.pmemlogCreate(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
 	if plp == nil {
 		err = errors.New("Failed to open pmem file")
@@ -349,7 +352,7 @@ func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
 	ptr := C.malloc(C.size_t(len(b)))
 	defer C.free(unsafe.Pointer(ptr))
 
-	copy((*[1 << 24]byte)(ptr)[0:len(b)], b)
+	copy((*[1 << 30]byte)(ptr)[0:len(b)], b)
 
 	if plp != nil {
 		if int(C.append(plp, (*C.uchar)(ptr), C.size_t(len(string(b))))) < 0 {
