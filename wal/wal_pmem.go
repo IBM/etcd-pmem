@@ -344,13 +344,6 @@ func Open(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, error) {
 		return nil, err
 	}
 
-	// Check if the current location is in pmem
-	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
-	if err != nil {
-		return nil, errors.New("Temporary file in pmem could not be removed")
-	}
-	w.pmemaware = pmemaware
-
 	return w, nil
 }
 
@@ -371,6 +364,12 @@ func openAtIndex(lg *zap.Logger, dirpath string, snap walpb.Snapshot, write bool
 		return nil, err
 	}
 
+	// Check if the current location is in pmem
+	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
+	if err != nil {
+		return nil, errors.New("Temporary file in pmem could not be removed")
+	}
+
 	// create a WAL ready for reading
 	w := &WAL{
 		dir:       dirpath,
@@ -378,12 +377,16 @@ func openAtIndex(lg *zap.Logger, dirpath string, snap walpb.Snapshot, write bool
 		decoder:   newDecoder(rs...),
 		readClose: closer,
 		locks:     ls,
+		pmemaware: pmemaware,
 	}
 
 	if write {
+		// close the objectpool only if the backing device is pmem
+		if !w.pmemaware {
 		// write reuses the file descriptors from read; don't close so
 		// WAL can append without dropping the file lock
 		w.readClose = nil
+	}
 		if _, _, err := parseWALName(filepath.Base(w.tail().Name())); err != nil {
 			closer()
 			return nil, err
@@ -428,14 +431,22 @@ func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int,
 			}
 			ls = append(ls, l)
 			if pmemaware {
-				pr := pmemutil.OpenForRead(p)
+				pr, err := pmemutil.OpenForReadCloser(p)
+				if err != nil {
+					pr.Close()
+                                return nil, nil, nil, err
+                        }
 				rcs = append(rcs, pr)
 			} else {
 				rcs = append(rcs, l)
 			}
 		} else {
 			if pmemaware {
-				rf := pmemutil.OpenForRead(p)
+				rf, err := pmemutil.OpenForReadCloser(p)
+				if err != nil {
+					rf.Close()
+                                return nil, nil, nil, err
+                        }
 				rcs = append(rcs, rf)
 			} else {
 				rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
@@ -519,6 +530,15 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 		}
 	}
 
+	// for pmem backed device the reader needs to be closed as soon as decoding stops
+	if w.pmemaware {
+	// close decoder, disable reading
+	if w.readClose != nil {
+		w.readClose()
+		w.readClose = nil
+ 	}
+}
+
 	switch w.tail() {
 	case nil:
 		// We do not have to read out all entries in read mode.
@@ -565,7 +585,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 	if w.readClose != nil {
 		w.readClose()
 		w.readClose = nil
-	}
+ 	}
 	w.start = walpb.Snapshot{}
 
 	w.metadata = metadata

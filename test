@@ -131,7 +131,7 @@ fi
 
 function unit_pass {
 	echo "Running unit tests..."
-	GO_TEST_FLAG=""
+	GO_TEST_FLAG="-tags='pmem'"
 	if [ "${VERBOSE}" == "1" ]; then
 		GO_TEST_FLAG="-v"
 	fi
