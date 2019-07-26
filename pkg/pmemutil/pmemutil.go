@@ -198,24 +198,19 @@ func WriteInMiddle(path string, b []byte, off uint) (err error) {
 }
 
 // InitiatePmemLogPool initiates a log pool
-func InitiatePmemLogPool(path string, poolSize int64) (err error) {
+func InitiatePmemLogPool(path string, poolSize int64) (plp Pmemlogpool, err error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
 	// Adding 2MB extrasize for Storing the Logfile Metadata
 	poolSize = poolSize + (2 * 1024 * 1024)
 
-	plp := C.pmemlogCreate(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
+	plp = C.pmemlogCreate(cpath, C.size_t(poolSize), C.uint(fileutil.PrivateFileMode))
 	if plp == nil {
 		err = errors.New("Failed to create new pmem file")
 	}
-	defer func() {
-		if plp != nil {
-			Close(plp)
-		}
-	}()
 
-	return err
+	return plp, err
 }
 
 // Seek gives the total bytes written in a particular file
@@ -273,14 +268,14 @@ func Resize(filePath string, off int64) (err error) {
 	if off < 2097152 {
 		off = 2097152
 	}
-	err = InitiatePmemLogPool(filePath, off)
+	plp, err := InitiatePmemLogPool(filePath, off)
 	if err != nil {
 		return err
 	}
-	pw := OpenForWrite(filePath)
+	pw := SetPmemWriter(filePath, plp)
 	w, err := pw.Write(data)
 	if err != nil {
-		err = errors.New("Could not write data during resizing pmem file")
+		err = errors.New("Could not write data during resizing pmem file as append did not work")
 		return err
 	}
 
@@ -302,63 +297,94 @@ func Close(plp Pmemlogpool) {
 // Pmemwriter structure just stores the buffer that would be written to pmem
 type Pmemwriter struct {
 	path string
+	plp    Pmemlogpool
 }
 
 // OpenForWrite returns the Pmem writer
-func OpenForWrite(path string) (pw *Pmemwriter) {
-	pw = &Pmemwriter{
-		path: path,
-	}
-	return pw
-}
-
-// GetLogPool fetches the the log pool. Make sure you close this just after using the log pool.
-func (pw *Pmemwriter) GetLogPool() (plp Pmemlogpool, err error) {
-	cpath := C.CString(pw.path)
-	defer C.free(unsafe.Pointer(cpath))
-
-	plp = C.pmemlogOpen(cpath)
-	if plp == nil {
-		err = errors.New("Failed to open pmem file")
-	}
-	return plp, err
-}
-
-// Rewind discards all data and reset the log memory pool to empty
-func (pw *Pmemwriter) Rewind() (err error) {
-	cpath := C.CString(pw.path)
-	defer C.free(unsafe.Pointer(cpath))
-
-	plp := C.pmemlogOpen(cpath)
-	if plp == nil {
-		err = errors.New("Failed to open pmem file for rewind")
-	}
-	defer Close(plp)
-
-	C.pmemlog_rewind(plp)
-	return
-}
-
-// Write writes len(b) bytes to the pmem buffer
-func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
-	cpath := C.CString(pw.path)
+func OpenForWrite(path string) (pw *Pmemwriter, err error) {
+	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
 	plp := C.pmemlogOpen(cpath)
 	if plp == nil {
 		err = errors.New("Failed to open pmem file for write")
 	}
-	defer Close(plp)
 
+	pw = &Pmemwriter{
+		path: path,
+		plp:  plp,
+	}
+	return
+}
+
+// SetPmemWriter sets the Pmem writer from provided plp
+func SetPmemWriter(path string, plp Pmemlogpool) (pw *Pmemwriter) {
+	pw = &Pmemwriter{
+                path: path,
+                plp:  plp,
+        }
+        return
+}
+
+// GetLogPool fetches the the log pool. Make sure you close this just after using the log pool.
+func (pw *Pmemwriter) GetLogPool() (plp Pmemlogpool) {
+	return pw.plp
+}
+
+// Rewind discards all data and reset the log memory pool to empty
+func (pw *Pmemwriter) Rewind() (err error) {
+	C.pmemlog_rewind(pw.plp)
+	return
+}
+
+// Seek gives the total bytes written in a particular file
+func (pw *Pmemwriter) Seek() (n int64, err error) {
+	if pw.plp != nil {
+	return int64(C.pmemlog_tell(pw.plp)), nil
+} else {
+	return 0, errors.New("Pmemlogpool value is nil in pmem writer")
+}
+}
+
+// Write writes len(b) bytes to the pmem buffer
+func (pw *Pmemwriter) Write(b []byte) (n int, err error) {
         cdata := C.CBytes(b)
         defer C.free(unsafe.Pointer(cdata))
 
-	if plp != nil {
-		if int(C.append(plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
+	if pw.plp != nil {
+		if int(C.append(pw.plp, (*C.uchar)(cdata), C.size_t(len(string(b))))) < 0 {
 			err = errors.New("Log could not be appended in pmem")
 		}
 	}
 	return len(b), err
+}
+
+// UpdatePmemwriter updates the path and plp of pmemwriter
+func (pw *Pmemwriter) UpdatePmemwriter(path string) error {
+	Close(pw.plp)
+
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	plp := C.pmemlogOpen(cpath)
+	if plp == nil {
+		err := errors.New("Failed to open pmem file for write during update")
+		return err
+	}
+
+	pw.path = path
+	pw.plp = plp
+
+	return nil
+}
+
+// Close closes the logpool
+func (pw *Pmemwriter) Close() (err error) {
+	if pw.plp != nil {
+	C.pmemlog_close(pw.plp)
+	pw.plp = nil
+}
+return nil
 }
 
 // Pmemreader implements buffering for io.Reader object
@@ -418,9 +444,11 @@ func (pr *Pmemreader) Read(b []byte) (n int, err error) {
 
 // PmemReadCloser implements buffering for io.ReadCloser object
 type PmemReadCloser struct {
-	path string
-	plp  Pmemlogpool
-	i    int64 // current reading index
+	path   string
+	plp    Pmemlogpool
+	i      int64   // current reading index
+	buf    []byte // Read data
+	length int64  // Length of the already read data. Initialize it with 0
 }
 
 // OpenForReadCloser opens a pmemlog from a path and returns the Pmem ReadCloser
@@ -437,20 +465,14 @@ func OpenForReadCloser(path string) (prc *PmemReadCloser, err error) {
 		path: path,
 		plp: plp,
 		i:    0,
+		length: 0,
 	}
 	return prc, err
 }
 
 // GetLogPool fetches the the log pool. Make sure you close this just after using the log pool.
-func (prc *PmemReadCloser) GetLogPool() (plp Pmemlogpool, err error) {
-	cpath := C.CString(prc.path)
-	defer C.free(unsafe.Pointer(cpath))
-
-	plp = C.pmemlogOpen(cpath)
-	if plp == nil {
-		err = errors.New("Failed to open pmem file")
-	}
-	return plp, err
+func (prc *PmemReadCloser) GetLogPool() (plp Pmemlogpool) {
+	return prc.plp
 }
 
 // Seek gives the total bytes written in a particular file
@@ -461,17 +483,20 @@ func (prc *PmemReadCloser) Seek() int64 {
 // Read reads data into b
 func (prc *PmemReadCloser) Read(b []byte) (n int, err error) {
 	length := C.pmemlog_tell(prc.plp)
+	if prc.length != int64(length) {
 
 	ptr := C.malloc(C.size_t(length))
 	defer C.free(unsafe.Pointer(ptr))
 
 	C.logprint(prc.plp, (*C.uchar)(ptr))
-	s := C.GoBytes(ptr, C.int(length))
-	if prc.i >= int64(len(s)) {
+	prc.buf = C.GoBytes(ptr, C.int(length))
+	prc.length = int64(length)
+}
+	if prc.i >= int64(len(prc.buf)) {
 		return 0, io.EOF
 	}
 
-	n = copy(b, s[prc.i:])
+	n = copy(b, prc.buf[prc.i:])
 	prc.i += int64(n)
 
 	return
@@ -479,6 +504,9 @@ func (prc *PmemReadCloser) Read(b []byte) (n int, err error) {
 
 // Close closes the open plp
 func (prc *PmemReadCloser) Close() (err error) {
+	if prc.plp != nil {
 	Close(prc.plp)
+	prc.plp = nil
+}
 	return nil
 }

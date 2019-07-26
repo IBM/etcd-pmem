@@ -67,19 +67,15 @@ func newFileEncoder(f *os.File, prevCrc uint32) (*encoder, error) {
 }
 
 // newPmemEncoder creates a new encoder with current file offset for the page writer.
-func newPmemEncoder(path string, prevCrc uint32) (*encoder, error) {
-	pw := pmemutil.OpenForWrite(path)
-	plp, err := pw.GetLogPool()
+func newPmemEncoder(pw *pmemutil.Pmemwriter, prevCrc uint32) (*encoder, error) {
+	offset, err := pw.Seek()
 	if err != nil {
-		return nil, err
-	}
-
-	offset := pmemutil.Seek(plp)
+                return nil, err
+        }
 	return newEncoder(pw, prevCrc, int(offset)), nil
 }
 
-func updateEncoderForPmem(path string, enc *encoder) {
-	pw := pmemutil.OpenForWrite(path)
+func updateEncoderForPmem(pw *pmemutil.Pmemwriter, enc *encoder) {
 	enc.bw = ioutil.NewPageWriter(pw, walPageBytes, 0)
 }
 

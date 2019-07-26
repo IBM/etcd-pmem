@@ -37,7 +37,7 @@ func TestFilePipeline(t *testing.T) {
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
-	f.Close()
+	f.l.Close()
 }
 
 func TestFilePipelineFailPreallocate(t *testing.T) {

@@ -52,6 +52,7 @@ func TestNew(t *testing.T) {
 		t.Errorf("name = %+v, want %+v", g, walName(0, 0))
 	}
 	defer w.Close()
+	w.PwClose()
 
 	var gd []byte
 	pmemaware, err := pmemutil.IsPmemTrue(p)
@@ -66,11 +67,6 @@ func TestNew(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		/*plp, err := pr.GetLogPool()
-		if err != nil {
-			t.Fatal(err)
-		}*/
 
 		// file is preallocated to segment size; only read data written by wal
 		off := prc.Seek()
@@ -152,7 +148,7 @@ func TestCreateFailFromNoSpaceLeft(t *testing.T) {
 	}
 }
 
-/*func TestNewForInitedDir(t *testing.T) {
+func TestNewForInitedDir(t *testing.T) {
 	p, err := ioutil.TempDir(os.TempDir(), "waltest")
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +213,7 @@ func TestOpenAtIndex(t *testing.T) {
 	if _, err = Open(zap.NewExample(), emptydir, walpb.Snapshot{}); err != ErrFileNotFound {
 		t.Errorf("err = %v, want %v", err, ErrFileNotFound)
 	}
-}*/
+}
 
 // TestVerify tests that Verify throws a non-nil error when the WAL is corrupted.
 // The test creates a WAL directory and cuts out multiple WAL files. Then
@@ -263,8 +259,15 @@ func TestVerify(t *testing.T) {
 
 	// corrupt the WAL by truncating one of the WAL files completely
 	if pmemaware {
-		pw := pmemutil.OpenForWrite(path.Join(walDir, walFiles[2].Name()))
+		pw, err := pmemutil.OpenForWrite(path.Join(walDir, walFiles[2].Name()))
+		if err != nil {
+                t.Fatal(err)
+        }
 		err = pw.Rewind()
+		if err != nil {
+                t.Fatal(err)
+        }
+	pmemutil.Close(pw.GetLogPool())
 	} else {
 		err = os.Truncate(path.Join(walDir, walFiles[2].Name()), 0)
 	}
@@ -322,6 +325,9 @@ func TestCut(t *testing.T) {
 	if g := filepath.Base(w.tail().Name()); g != wname {
 		t.Errorf("name = %s, want %s", g, wname)
 	}
+
+	// Close all the open object pool of pmemwriters
+	w.PwClose()
 
 	// check the state in the last WAL
 	// We do check before closing the WAL to ensure that Cut syncs the data
@@ -397,6 +403,9 @@ func TestSaveWithCut(t *testing.T) {
 	if g := filepath.Base(neww.tail().Name()); g != wname {
 		t.Errorf("name = %s, want %s", g, wname)
 	}
+
+	// Close all the open object pool of pmemwriters
+	w.PwClose()
 
 	_, newhardstate, entries, err := neww.ReadAll()
 	if err != nil {

@@ -27,6 +27,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// pmemCollection encapsulates LockedFile and Pmemlogpool
+type PmemCollection struct {
+	plp pmemutil.Pmemlogpool
+	l   fileutil.LockedFile
+}
+
 // filePipeline pipelines allocating disk space
 type filePipeline struct {
 	lg *zap.Logger
@@ -39,7 +45,7 @@ type filePipeline struct {
 	count  int
 	isPmem bool
 
-	filec chan *fileutil.LockedFile
+	filec chan *PmemCollection
 	errc  chan error
 	donec chan struct{}
 }
@@ -54,7 +60,7 @@ func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
 		dir:    dir,
 		isPmem: isPmem,
 		size:   fileSize,
-		filec:  make(chan *fileutil.LockedFile),
+		filec:  make(chan *PmemCollection),
 		errc:   make(chan error, 1),
 		donec:  make(chan struct{}),
 	}
@@ -64,7 +70,7 @@ func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
 
 // Open returns a fresh file for writing. Rename the file before calling
 // Open again or there will be file collisions.
-func (fp *filePipeline) Open() (f *fileutil.LockedFile, err error) {
+func (fp *filePipeline) Open() (f *PmemCollection, err error) {
 	select {
 	case f = <-fp.filec:
 	case err = <-fp.errc:
@@ -77,27 +83,14 @@ func (fp *filePipeline) Close() error {
 	return <-fp.errc
 }
 
-func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
+func (fp *filePipeline) alloc() (p *PmemCollection, err error) {
 
 	// count % 2 so this file isn't the same as the one last published
 	fpath := filepath.Join(fp.dir, fmt.Sprintf("%d.tmp", fp.count%2))
 
-	if !fp.isPmem {
-		if f, err = fileutil.LockFile(fpath, os.O_CREATE|os.O_WRONLY, fileutil.PrivateFileMode); err != nil {
-			return nil, err
-		}
-		if err = fileutil.Preallocate(f.File, fp.size, true); err != nil {
-			if fp.lg != nil {
-				fp.lg.Warn("failed to preallocate space when creating a new WAL", zap.Int64("size", fp.size), zap.Error(err))
-			} else {
-				plog.Errorf("failed to allocate space when creating new wal file (%v)", err)
-			}
-			f.Close()
-			return nil, err
-		}
-	} else {
+	var plp pmemutil.Pmemlogpool
 		if !fileutil.Exist(fpath) {
-		    err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
+			plp, err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
 		if err != nil {
 			if fp.lg != nil {
 				fp.lg.Warn(
@@ -111,7 +104,7 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
                 }
 
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
-		f, err = fileutil.LockFile(fpath, os.O_WRONLY, fileutil.PrivateFileMode)
+		f, err := fileutil.LockFile(fpath, os.O_WRONLY, fileutil.PrivateFileMode)
 		if err != nil {
 			if fp.lg != nil {
 				fp.lg.Warn(
@@ -122,9 +115,14 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			}
 			return nil, err
 		}
-	}
+
 	fp.count++
-	return f, nil
+
+	p = &PmemCollection{
+		plp: plp,
+		l: *f,
+	}
+	return p, nil
 }
 
 func (fp *filePipeline) run() {
@@ -138,9 +136,11 @@ func (fp *filePipeline) run() {
 		select {
 		case fp.filec <- f:
 		case <-fp.donec:
-			os.Remove(f.Name())
+			os.Remove(f.l.Name())
 			if !fp.isPmem {
-				f.Close()
+				f.l.Close()
+			} else {
+				pmemutil.Close(f.plp)
 			}
 			return
 		}
