@@ -24,6 +24,7 @@
 # to run only "TestNew", set "TESTCASE="\bTestNew\b""
 #
 # $ PASSES=unit PKG=./wal TESTCASE=TestNew TIMEOUT=1m ./test
+# $ PASSES=unit PKG=./wal PMEM=True TESTCASE=TestNew TIMEOUT=1m ./test
 # $ PASSES=unit PKG=./wal TESTCASE="\bTestNew\b" TIMEOUT=1m ./test
 # $ PASSES=integration PKG=client/integration TESTCASE="\bTestV2NoRetryEOF\b" TIMEOUT=1m ./test
 #
@@ -48,6 +49,10 @@ USERPKG=${PKG:-}
 
 # Invoke ./tests/cover.test.bash for HTML output
 COVER=${COVER:-"-cover"}
+PMEM=${PMEM:-}
+if [ -z "${PMEM}" ]; then
+	PMEM=false
+fi
 
 # Hack: gofmt ./ will recursively check the .git directory. So use *.go for gofmt.
 IGNORE_PKGS="(vendor/|etcdserverpb|rafttest|gopath.proto|v3lockpb|v3electionpb)"
@@ -131,7 +136,9 @@ fi
 
 function unit_pass {
 	echo "Running unit tests..."
-	GO_TEST_FLAG="-tags='pmem'"
+	if [ "${PMEM}" ]; then
+		GO_TEST_FLAG="-tags='pmem'"
+	fi
 	if [ "${VERBOSE}" == "1" ]; then
 		GO_TEST_FLAG="-v"
 	fi

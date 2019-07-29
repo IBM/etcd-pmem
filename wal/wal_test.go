@@ -53,6 +53,11 @@ func TestNew(t *testing.T) {
 	}
 	defer w.Close()
 
+	// file is preallocated to segment size; only read data written by wal
+	off, err := w.tail().Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	gd := make([]byte, off)
 	f, err := os.Open(filepath.Join(p, filepath.Base(w.tail().Name())))
 	if err != nil {

@@ -29,7 +29,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type corruptFunc func(string, int64, bool) error
+type corruptFunc func(string, int64) error
 
 // TestRepairTruncate ensures a truncated file can be repaired
 func TestRepairTruncate(t *testing.T) {
