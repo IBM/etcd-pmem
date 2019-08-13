@@ -6,3 +6,21 @@ This is a POC code to evaluate ETCD performance with persistent memory (PMEM).
 - Basheer Khadarsabgari (bkhadars@in.ibm.com)
 - Pradipta Kumar (bpradipt@in.ibm.com)
 - Vaibhav Jain (vajain21@in.ibm.com)
+
+# Build Instructions
+## PMDK
+```
+sudo apt-get update && sudo apt install -y make pkg-config libndctl-dev libdaxctl-dev autoconf
+git clone https://github.com/bpradipt/pmdk.git
+cd pmdk
+git checkout -b etcd-pmem remotes/origin/etcd-pmem
+make -j8 && sudo make install
+```
+## ETCD
+```
+git clone https://github.com/IBM/etcd-pmem
+cd etcd-pmem
+git checkout -b etcd-pmem remotes/origin/etcd-pmem
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+make build-pmem
+```
