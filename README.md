@@ -7,7 +7,9 @@ This is a POC code to evaluate ETCD performance with persistent memory (PMEM).
 - Pradipta Kumar (bpradipt@in.ibm.com)
 - Vaibhav Jain (vajain21@in.ibm.com)
 
-# Build Instructions
+# Build Instructions 
+These instructions have been tried on Ubuntu 18.04
+
 ## PMDK
 ```
 sudo apt-get update && sudo apt install -y make pkg-config libndctl-dev libdaxctl-dev autoconf
