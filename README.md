@@ -10,6 +10,10 @@ This is a POC code to evaluate ETCD performance with persistent memory (PMEM).
 # Build Instructions 
 These instructions have been tried on Ubuntu 18.04
 
+## Pre-req
+- Ensure `git` and `golang` is installed.
+- Ensure `GOPATH` is set
+
 ## PMDK
 ```
 sudo apt-get update && sudo apt install -y make pkg-config libndctl-dev libdaxctl-dev autoconf
