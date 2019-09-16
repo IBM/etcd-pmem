@@ -40,7 +40,7 @@ var (
 	// initialMmapSize is the initial size of the mmapped region. Setting this larger than
 	// the potential max db size can prevent writer from blocking reader.
 	// This only works for linux.
-	initialMmapSize = uint64(10 * 1024 * 1024 * 1024)
+	initialMmapSize = uint64(1 * 1024 * 1024 * 1024)
 
 	plog = capnslog.NewPackageLogger("go.etcd.io/etcd", "mvcc/backend")
 

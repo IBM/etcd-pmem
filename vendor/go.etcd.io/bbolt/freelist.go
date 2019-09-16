@@ -6,6 +6,9 @@ import (
 	"unsafe"
 )
 
+// TestFreelistType is used as a env variable for test to indicate the backend type
+const TestFreelistType = "TEST_FREELIST_TYPE"
+
 // txPending holds a list of pgids and corresponding allocation txns
 // that are pending to be freed.
 type txPending struct {

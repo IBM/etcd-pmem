@@ -1,9 +1,8 @@
-// +build !windows,!plan9,!solaris,!pmem
+// +build !windows,!plan9,!solaris,pmem
 
 package bbolt
 
 import (
-	"fmt"
 	"syscall"
 	"time"
 	"unsafe"
@@ -49,22 +48,16 @@ func funlock(db *DB) error {
 // mmap memory maps a DB's data file.
 func mmap(db *DB, sz int) error {
 	// Map the data file to memory.
-	b, err := syscall.Mmap(int(db.file.Fd()), 0, sz, syscall.PROT_READ, syscall.MAP_SHARED|db.MmapFlags)
+	ml, b, err  := mmap_pmem(db.Path(), sz)
 	if err != nil {
 		return err
-	}
-
-	// Advise the kernel that the mmap is accessed randomly.
-	err = madvise(b, syscall.MADV_RANDOM)
-	if err != nil && err != syscall.ENOSYS {
-		// Ignore not implemented error in kernel because it still works.
-		return fmt.Errorf("madvise: %s", err)
 	}
 
 	// Save the original byte slice and convert to a byte array pointer.
 	db.dataref = b
 	db.data = (*[maxMapSize]byte)(unsafe.Pointer(&b[0]))
 	db.datasz = sz
+	db.ml = ml
 	return nil
 }
 
@@ -75,12 +68,12 @@ func munmap(db *DB) error {
 		return nil
 	}
 
-	// Unmap using the original byte slice.
-	err := syscall.Munmap(db.dataref)
+	munmap_pmem(db.ml)
 	db.dataref = nil
 	db.data = nil
 	db.datasz = 0
-	return err
+	db.ml = nil
+	return nil
 }
 
 // NOTE: This function is copied from stdlib because it is not available on darwin.

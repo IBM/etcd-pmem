@@ -1,4 +1,4 @@
-// +build !pmem
+// +build pmem
 
 package bbolt
 
@@ -125,6 +125,8 @@ type DB struct {
 	path     string
 	openFile func(string, int, os.FileMode) (*os.File, error)
 	file     *os.File
+	pw       *PmemWriter
+	ml       pmem_layout
 	dataref  []byte // mmap'ed readonly, write throws SEGV
 	data     *[maxMapSize]byte
 	datasz   int
@@ -281,6 +283,10 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 		return nil, err
 	}
 
+	// Default values for test hooks
+	setPmemWriter(db)
+	db.ops.writeAt = db.pw.WriteAt
+
 	if db.readOnly {
 		return db, nil
 	}
@@ -343,6 +349,7 @@ func (db *DB) mmap(minsz int) error {
 	if size < minsz {
 		size = minsz
 	}
+	fmt.Println("Checkpoint1: ", minsz)
 	size, err = db.mmapSize(size)
 	if err != nil {
 		return err
