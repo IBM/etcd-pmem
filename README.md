@@ -112,6 +112,13 @@ etcd is now running and serving client requests. For more, please check out:
 - [Interactive etcd playground](http://play.etcd.io)
 - [Animated quick demo](./Documentation/demo.md)
 
+### Running etcd with pmem support
+1. Install PMDK library (https://github.com/pmem/pmdk).
+2. Clone etcd from https://github.com/IBM/etcd-pmem.git.
+3. Then `mkdir -p $GOPATH/src/go.etcd.io && mv etcd-pmem $GOPATH/src/go.etcd.io/etcd && cd $GOPATH/src/go.etcd.io/etcd && git checkout pmem-load-store`.
+4. Build etcd with `make build-pmem`.
+5. Run etcd with `bin/etcd --name etcd-1 --data-dir /root/pmem0_30g/etcd.data`
+
 ### etcd TCP ports
 
 The [official etcd ports][iana-ports] are 2379 for client requests, and 2380 for peer communication.
