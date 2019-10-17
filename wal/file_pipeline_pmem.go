@@ -43,7 +43,6 @@ type filePipeline struct {
 	size int64
 	// count number of files generated
 	count  int
-	isPmem bool
 
 	filec chan *PmemCollection
 	errc  chan error
@@ -51,14 +50,9 @@ type filePipeline struct {
 }
 
 func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
-
-	// Check if the current location is in pmem
-	isPmem, _ := pmemutil.IsPmemTrue(dir)
-
 	fp := &filePipeline{
 		lg:     lg,
 		dir:    dir,
-		isPmem: isPmem,
 		size:   fileSize,
 		filec:  make(chan *PmemCollection),
 		errc:   make(chan error, 1),
@@ -137,11 +131,7 @@ func (fp *filePipeline) run() {
 		case fp.filec <- f:
 		case <-fp.donec:
 			os.Remove(f.l.Name())
-			if !fp.isPmem {
 				f.l.Close()
-			} else {
-				pmemutil.Close(f.plp)
-			}
 			return
 		}
 	}
