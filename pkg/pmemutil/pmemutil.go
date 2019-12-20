@@ -40,10 +40,6 @@ int append(PMEMlogpool *plp, const unsigned char *buf, size_t len) {
 	return ap;
 }
 
-int WriteInMiddle(PMEMlogpool *plp, const unsigned char *buf, size_t len, unsigned long long write_offset) {
-	return pmemlog_append_at_offset(plp, buf, len, write_offset);
-}
-
 static int printit(const void *buf, size_t len, void *arg)
 {
 	memcpy(arg, buf, len);
@@ -170,31 +166,6 @@ func IsPmemTrue(dirpath string) (bool, error) {
 		return false, err
 	}
 	return true, err
-}
-
-// WriteInMiddle appends bytes at any offset of pmemlog
-func WriteInMiddle(path string, b []byte, off uint) (err error) {
-	cpath := C.CString(path)
-	defer C.free(unsafe.Pointer(cpath))
-
-	plp := C.pmemlogOpen(cpath)
-	if plp == nil {
-		err = errors.New("Failed to open pmem file for write")
-	}
-	defer Close(plp)
-
-	ptr := C.malloc(C.size_t(len(b)))
-	defer C.free(unsafe.Pointer(ptr))
-
-	cdata := C.CBytes(b)
-	defer C.free(unsafe.Pointer(cdata))
-
-	if plp != nil {
-	    if int(C.WriteInMiddle(plp, (*C.uchar)(cdata), C.size_t(len(b)), (C.ulonglong)(off))) < 0 {
-		err = errors.New("Could not write at the specified offset in pmemlog file")
-	    }
-    }
-	    return err
 }
 
 // InitiatePmemLogPool initiates a log pool
